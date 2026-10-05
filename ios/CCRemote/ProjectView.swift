@@ -75,16 +75,17 @@ struct ProjectView: View {
                 }
             }
 
-            Section(loaded ? "Các phiên (\(sessions.count))" : "Các phiên") {
+            let liveIds = Set(live.map(\.id))
+            let older = sessions.filter { !liveIds.contains($0.id) }
+            Section(loaded ? "Phiên trước (\(older.count))" : "Phiên trước") {
                 if let error {
                     Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red).font(.callout)
                 } else if !loaded {
                     HStack { ProgressView(); Text("Đang tải…").foregroundStyle(.secondary) }
-                } else if sessions.isEmpty {
-                    Text("Chưa có phiên nào").foregroundStyle(.secondary)
+                } else if older.isEmpty {
+                    Text(sessions.isEmpty ? "Chưa có phiên nào" : "Không có phiên cũ — tất cả đang chạy").foregroundStyle(.secondary)
                 }
-                let liveIds = Set(live.map(\.id))
-                ForEach(sessions.filter { !liveIds.contains($0.id) }) { s in
+                ForEach(older) { s in
                     NavigationLink(value: Route.session(s.id)) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(s.title).lineLimit(2)

@@ -199,7 +199,7 @@ enum MarkdownParser {
 
 enum Inline {
     /// Markdown inline (đậm, nghiêng, link, `code`), `code` tô màu và nền như VS Code.
-    static func attributed(_ s: String) -> AttributedString {
+    static func attributed(_ s: String, code: Font = .system(.callout, design: .monospaced)) -> AttributedString {
         let opts = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         var a = (try? AttributedString(markdown: s, options: opts)) ?? AttributedString(s)
         var codeRanges: [Range<AttributedString.Index>] = []
@@ -207,7 +207,7 @@ enum Inline {
             codeRanges.append(run.range)
         }
         for r in codeRanges {
-            a[r].font = .system(.callout, design: .monospaced)
+            a[r].font = code
             a[r].foregroundColor = Color(red: 0.84, green: 0.45, blue: 0.30)
             a[r].backgroundColor = Color(.tertiarySystemFill)
         }
@@ -256,11 +256,11 @@ struct TableBlock: View {
                 ForEach(Array(rows.enumerated()), id: \.offset) { r, row in
                     GridRow {
                         ForEach(0..<cols, id: \.self) { c in
-                            Text(Inline.attributed(c < row.count ? row[c] : ""))
+                            Text(Inline.attributed(c < row.count ? row[c] : "", code: .system(.footnote, design: .monospaced)))
                                 .font(r == 0 ? .footnote.weight(.semibold) : .footnote)
                                 .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
                                 .frame(minWidth: 70, maxWidth: 240, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
                                 .padding(.horizontal, 8).padding(.vertical, 6)
                                 .frame(maxHeight: .infinity, alignment: .topLeading)
                                 .background(r == 0 ? Color(.tertiarySystemFill) : Color.clear)

@@ -638,7 +638,7 @@ class Session {
     if (this.pending.size) return 'waiting';
     if (b.parked) return 'idle';
     if (b.busy || Date.now() - (this.fileChangedAt || 0) < 15e3) return 'running';
-    return 'off';
+    return 'idle';   // Claude trên máy đã xong lượt, VS Code vẫn mở
   }
 
   summary() {
@@ -1156,7 +1156,7 @@ function createHub(ctx = {}) {
     },
     state() {
       const info = accountsInfo();
-      const recentBridge = (s) => s.bridge && (s.bridge.attached || Date.now() - s.bridge.lastSeen < 12 * 3600e3);
+      const recentBridge = (s) => s.bridge && (s.bridge.attached || Date.now() - Math.max(s.bridge.lastSeen, s.fileChangedAt || 0) < 30 * 60e3);
       const live = [...sessions.values()].filter((s) => s.proc || s.pending.size || recentBridge(s)).map((s) => s.summary())
         .sort((a, b) => b.updatedAt - a.updatedAt);
       const liveIds = new Set(live.map((s) => s.id));

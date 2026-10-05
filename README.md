@@ -124,7 +124,25 @@ tool đang chạy, kết quả · **duyệt quyền** (Cho phép / Luôn cho ph�
 hoạch · ngắt · **cài đặt phiên giống VS Code**: đổi model (danh sách lấy thẳng từ Claude Code), Effort (Low → Max),
 Thinking, Fast mode, tự đổi model khi tin nhắn bị flag, chế độ quyền, output style; áp dụng ngay giữa phiên · gõ `/` để
 chọn lệnh (`/compact`, `/context`, `/review`…) · xem % hạn mức 5h/7 ngày · **hết hạn mức → "Đổi sang X & tiếp tục"** (đổi
-tài khoản, khởi động lại phiên với `--resume` rồi gửi "tiếp tục").
+tài khoản, khởi động lại phiên với `--resume` rồi gửi "tiếp tục") · phiên xếp theo **dự án**, mở phiên mới ngay trong dự án ·
+khung trả lời giống VS Code (markdown đủ bảng/danh sách, tool có IN/OUT, diff của Edit).
+
+### Điều khiển phiên đang mở trong VS Code / terminal
+
+App mở phiên bằng tiến trình riêng, nên **phiên đang chạy trong VS Code** không tự thấy tin từ điện thoại. Để điều khiển
+đúng phiên đó, cài hook (dashboard → thẻ Điện thoại → bước 4 **Cài hook**, hoặc `node remote.js hooks install`):
+
+1. Mở lại phiên Claude Code (hook chỉ có hiệu lực với phiên mở sau khi cài).
+2. Trước khi rời máy, gõ **`/phone`** trong VS Code. Claude trả lời một câu rồi đứng chờ (dòng trạng thái *Chờ lệnh từ
+   điện thoại*).
+3. Trên app, phiên hiện ở *Đang chạy* với nhãn **VS Code · đã gắn**: gửi tin là Claude trong VS Code làm tiếp, xin quyền
+   thì hỏi trên điện thoại, màn hình máy tính vẫn thấy mọi thứ.
+4. Về máy: gõ bất kỳ tin nào trong VS Code (tự thả về máy) hoặc bấm **Thả về máy** trên app.
+
+Cách hoạt động: hook `Stop` giữ phiên chờ tin từ điện thoại rồi đưa vào như lời người dùng, hook `PermissionRequest`
+chuyển hộp thoại xin quyền sang điện thoại, hook `UserPromptSubmit` bắt `/phone`. Khi không gắn điện thoại (hoặc
+tracker không chạy) hook cho qua ngay (~80 ms), phiên chạy như thường. Gỡ: `node remote.js hooks uninstall`
+(`settings.json` được sao lưu thành `settings.json.cc-remote-backup`).
 
 ### Cài đặt (một lần)
 
