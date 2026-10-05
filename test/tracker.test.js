@@ -546,3 +546,14 @@ test('api/hub: ghép qua hub thật lưu token, không lưu mật khẩu; sai m�
     });
   } finally { await H.stop(); try { fs.unlinkSync(hubFile); } catch {} }
 });
+
+test('api/remote: chỉ còn hub, hook, luôn sẵn sàng — bỏ Tailscale / mã ghép / ntfy riêng', async () => {
+  reset();
+  await withServer(async ({ call }) => {
+    const r = (await call('GET', '/api/remote')).json();
+    assert.deepEqual(Object.keys(r).sort(), ['alwaysOn', 'enabled', 'hooks', 'hub', 'live']);
+    for (const p of ['pair', 'revoke', 'ntfy', 'ntfy-test', 'serve']) {
+      assert.equal((await call('POST', `/api/remote/${p}`, { headers: CSRF, body: '{}' })).status, 404, p);
+    }
+  });
+});

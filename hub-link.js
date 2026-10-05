@@ -27,12 +27,10 @@ function startLink({ hubUrl, machineToken, hub, onStatus = () => {}, backoff = {
 
   // ---------- người xem phiên qua hub (giống một kết nối SSE của đường cũ) ----------
   function unsubscribe(key) {
-    const x = subs.get(key);
-    if (!x) return;
+    const off = subs.get(key);
+    if (!off) return;
     subs.delete(key);
-    x.s.clients.delete(x.client);
-    x.s.updatedAt = Math.max(x.s.updatedAt, Date.now() - 15 * 60e3);   // vừa có người xem -> chưa tắt ngay
-    x.s.broadcastState();
+    off();
   }
   function subscribe(conn, session, after, epoch) {
     const key = `${conn}:${session}`;
@@ -40,18 +38,7 @@ function startLink({ hubUrl, machineToken, hub, onStatus = () => {}, backoff = {
     const s = UUID.test(session) && hub.get(session.toLowerCase());
     const ev = (data) => raw({ type: 'event', to: conn, session, data });
     if (!s) return ev({ kind: 'error', text: 'Không tìm thấy phiên' });
-    const client = {
-      send: ev,
-      reset: () => { ev({ kind: 'reset', epoch: s.epoch }); for (const e of s.events) ev(e); ev({ kind: 'state', ...s.summary() }); },
-    };
-    if (epoch !== s.epoch) client.reset();
-    else {
-      for (const e of s.events) if (e.seq > after) ev(e);
-      ev({ kind: 'state', ...s.summary() });
-    }
-    s.clients.add(client);
-    subs.set(key, { s, client });
-    s.broadcastState();
+    subs.set(key, remote.subscribe(s, { after, epoch }, ev));
   }
   const dropSubs = () => { for (const k of [...subs.keys()]) unsubscribe(k); };
 

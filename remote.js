@@ -1,19 +1,17 @@
 #!/usr/bin/env node
-// Điều khiển Claude Code từ điện thoại (app iOS "CC Remote") qua Tailscale.
-// Server riêng ở 127.0.0.1:7789 (đưa ra tailnet bằng `tailscale serve --bg 7789`), mọi API cần token thiết bị.
+// Điều khiển Claude Code từ điện thoại (app iOS "CC Remote"). Điện thoại đi qua hub trên VPS (hub-link.js gọi call()).
 // Mỗi phiên là một tiến trình `claude -p` nói chuyện bằng stream-json qua stdin/stdout; hỏi quyền đi qua
 // control_request `can_use_tool` (--permission-prompt-tool stdio) để duyệt từ điện thoại.
+// Server 127.0.0.1:7789 chỉ còn cho hook.js của phiên VS Code / terminal đang mở trên máy.
 //
-//   node remote.js pair      -> tạo mã ghép 6 số (hiệu lực 10 phút)
-//   node remote.js devices   -> liệt kê thiết bị đã ghép
-//   node remote.js revoke <id>
+//   node remote.js hooks [install|uninstall]
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
-const { spawn, spawnSync, execFile } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const MIN = 60e3;
 const VERSION = 1;
@@ -26,9 +24,6 @@ const MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions'];
 const MAX_EVENTS = 1500;
 const IDLE_CLOSE_MS = 30 * MIN;     // phiên rảnh, không ai xem -> tắt tiến trình (tin nhắn sau sẽ --resume)
 const DORMANT_DROP_MS = 60 * MIN;   // phiên đã tắt, không ai xem -> bỏ khỏi bộ nhớ
-const PAIR_TTL = 10 * MIN;
-const PAIR_TRIES = 5;
-const HEARTBEAT_MS = 15e3;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class RemoteError extends Error {
@@ -41,7 +36,7 @@ function load() {
   let d;
   try { d = JSON.parse(fs.readFileSync(remoteFile(), 'utf8')); } catch { d = {}; }
   return {
-    devices: Array.isArray(d.devices) ? d.devices : [], pair: d.pair || null, ntfy: d.ntfy || null, hookKey: d.hookKey || null,
+    hookKey: d.hookKey || null,
     alwaysOn: d.alwaysOn !== false,   // phiên VS Code luôn sẵn sàng nhận lệnh từ điện thoại (không cần /phone)
   };
 }
@@ -87,91 +82,6 @@ function save(d) {
 }
 
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
-
-function newPairCode(now = Date.now()) {
-  const d = load();
-  d.pair = { code: String(crypto.randomInt(0, 1e6)).padStart(6, '0'), expiresAt: now + PAIR_TTL, tries: 0 };
-  save(d);
-  return { code: d.pair.code, expiresAt: d.pair.expiresAt };
-}
-
-function pair(code, name, now = Date.now()) {
-  const d = load();
-  const p = d.pair;
-  if (!p || p.expiresAt < now) throw new RemoteError('PAIR_EXPIRED', 'Mã ghép đã hết hạn hoặc chưa tạo — tạo mã mới trên dashboard', 403);
-  const ok = typeof code === 'string' && code.length === p.code.length &&
-    crypto.timingSafeEqual(Buffer.from(code), Buffer.from(p.code));
-  if (!ok) {
-    p.tries = (p.tries || 0) + 1;
-    if (p.tries >= PAIR_TRIES) d.pair = null;   // đoán sai nhiều lần -> huỷ mã
-    save(d);
-    throw new RemoteError('PAIR_WRONG', d.pair ? 'Sai mã ghép' : 'Sai mã quá nhiều lần — tạo mã mới', 403);
-  }
-  const token = crypto.randomBytes(32).toString('base64url');
-  const dev = {
-    id: crypto.randomBytes(6).toString('hex'),
-    name: String(name || 'iPhone').slice(0, 60),
-    hash: sha(token),
-    createdAt: now,
-    lastSeen: now,
-  };
-  d.devices.push(dev);
-  d.pair = null;
-  save(d);
-  return { token, deviceId: dev.id };
-}
-
-const seenWritten = new Map();
-function authDevice(token, now = Date.now()) {
-  if (!token) return null;
-  const h = Buffer.from(sha(token));
-  const d = load();
-  const dev = d.devices.find((x) => typeof x.hash === 'string' && x.hash.length === h.length && crypto.timingSafeEqual(Buffer.from(x.hash), h));
-  if (!dev) return null;
-  if (now - (seenWritten.get(dev.id) || 0) > 5 * MIN) {   // không ghi file mỗi request
-    seenWritten.set(dev.id, now);
-    dev.lastSeen = now;
-    try { save(d); } catch {}
-  }
-  return dev;
-}
-
-function devices() {
-  return load().devices.map(({ id, name, createdAt, lastSeen }) => ({ id, name, createdAt, lastSeen }));
-}
-
-function revoke(id) {
-  const d = load();
-  const n = d.devices.length;
-  d.devices = d.devices.filter((x) => x.id !== id);
-  if (d.devices.length === n) throw new RemoteError('NOT_FOUND', 'Không có thiết bị này', 404);
-  save(d);
-  return { ok: true };
-}
-
-function setNtfy(patch) {
-  const d = load();
-  const topic = String((patch && patch.topic) || '').trim();
-  if (topic && !/^[\w-]{6,64}$/.test(topic)) throw new RemoteError('FORMAT', 'Topic ntfy chỉ gồm chữ, số, - và _ (6–64 ký tự)');
-  const server = String((patch && patch.server) || 'https://ntfy.sh').trim().replace(/\/+$/, '');
-  if (!/^https?:\/\/[^\s/]+/.test(server)) throw new RemoteError('FORMAT', 'Địa chỉ server ntfy không hợp lệ');
-  d.ntfy = topic ? { server, topic } : null;
-  save(d);
-  return d.ntfy;
-}
-
-// Thông báo khi app đang đóng (ntfy.sh hoặc server ntfy riêng). Chỉ gửi tiêu đề ngắn, không gửi nội dung code.
-const b64h = (s) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s).toString('base64')}?=`);
-function notify(title, body, sid, fetchImpl = globalThis.fetch) {
-  const n = load().ntfy;
-  if (!n || !n.topic || !fetchImpl) return Promise.resolve(false);
-  return fetchImpl(`${n.server}/${encodeURIComponent(n.topic)}`, {
-    method: 'POST',
-    body: body || ' ',
-    headers: { Title: b64h(title), Tags: 'robot', ...(sid ? { Click: `ccremote://session/${sid}` } : {}) },
-    signal: AbortSignal.timeout(10e3),
-  }).then((r) => r.ok, () => false);
-}
 
 // ---------- tìm lệnh claude ----------
 
@@ -1207,7 +1117,7 @@ function createHub(ctx = {}) {
     notifyVia: null,
     notify: async (title, body, sid) => {
       if (hub.notifyVia && hub.notifyVia(title, body, sid)) return true;
-      return (ctx.notify || notify)(title, body, sid);
+      return ctx.notify ? ctx.notify(title, body, sid) : false;   // chưa nối hub: không có kênh thông báo
     },
     // Phiên trên máy vừa gọi hook: tạo/cập nhật cầu nối.
     bridgeFor(b) {
@@ -1375,7 +1285,6 @@ function createHub(ctx = {}) {
             costToday: a.costToday || 0,
           })),
         } : null,
-        ntfy: load().ntfy,
         alwaysOn: alwaysOn(), pcAway: hub.pcAway(),
       };
     },
@@ -1451,11 +1360,6 @@ async function jsonBody(req) {
   return b && typeof b === 'object' ? b : {};
 }
 
-function bearer(req) {
-  const h = req.headers.authorization || '';
-  return h.startsWith('Bearer ') ? h.slice(7).trim() : '';
-}
-
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
 // ---------- lõi dùng chung: HTTP cũ (Tailscale) và hub (hub-link.js) đều gọi call() ----------
@@ -1495,17 +1399,28 @@ async function call(hub, method, params = {}) {
   return s.summary();
 }
 
-// Đường dẫn HTTP cũ -> { method, params } của call().
-function httpRoute(verb, p, url) {
-  const get = { '/v1/state': 'state', '/v1/projects': 'projects', '/v1/projects/sessions': 'projects.sessions', '/v1/capabilities': 'capabilities' };
-  const post = { '/v1/sessions': 'sessions.create', '/v1/accounts/switch': 'accounts.switch', '/v1/always-on': 'alwaysOn' };
-  if (verb === 'GET' && get[p]) return { method: get[p], params: p === '/v1/projects/sessions' ? { cwd: url.searchParams.get('cwd') || '' } : {} };
-  if (verb === 'POST' && post[p]) return { method: post[p], params: {} };
-  const m = /^\/v1\/sessions\/([0-9a-f-]{36})(?:\/(send|permission|interrupt|mode|model|settings|attach|close))?$/i.exec(p);
-  if (!m || (verb === 'GET') === !!m[2] || (verb !== 'GET' && verb !== 'POST')) return null;
-  return { method: m[2] ? `sessions.${m[2]}` : 'sessions.get', params: { id: m[1] } };
+// Người xem một phiên (app qua hub-link, hoặc test): phát lại sự kiện sau `after` (cùng epoch) hoặc nạp lại từ đầu,
+// rồi đẩy sự kiện mới qua send(ev). Trả hàm thôi xem.
+function subscribe(s, { after = 0, epoch = '' } = {}, send) {
+  const client = {
+    send,
+    reset: () => { send({ kind: 'reset', epoch: s.epoch }); for (const e of s.events) send(e); send({ kind: 'state', ...s.summary() }); },
+  };
+  if (epoch !== s.epoch) client.reset();
+  else {
+    for (const e of s.events) if (e.seq > after) send(e);
+    send({ kind: 'state', ...s.summary() });
+  }
+  s.clients.add(client);
+  s.broadcastState();
+  return () => {
+    if (!s.clients.delete(client)) return;
+    s.updatedAt = Math.max(s.updatedAt, Date.now() - IDLE_CLOSE_MS / 2);   // vừa có người xem -> chưa tắt ngay
+    s.broadcastState();
+  };
 }
 
+// Server trên máy (127.0.0.1:7789) chỉ còn cho hook.js của phiên VS Code / terminal. Điện thoại đi qua hub (hub-link.js).
 function createRemoteServer(hub) {
   try { hookKey(); } catch {}   // để hook.js đọc được khoá ngay từ lần đầu
   const send = (res, code, data) => {
@@ -1513,76 +1428,20 @@ function createRemoteServer(hub) {
     res.end(JSON.stringify(data));
   };
 
-  function stream(req, res, s, after, epoch) {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store',
-      Connection: 'keep-alive', 'X-Accel-Buffering': 'no',
-    });
-    res.socket && res.socket.setNoDelay(true);
-    const write = (ev) => res.write(`data: ${JSON.stringify(ev)}\n\n`);
-    const client = {
-      send: write,
-      reset: () => { write({ kind: 'reset', epoch: s.epoch }); for (const e of s.events) write(e); write({ kind: 'state', ...s.summary() }); },
-    };
-    if (epoch !== s.epoch) client.reset();
-    else {
-      for (const e of s.events) if (e.seq > after) write(e);
-      write({ kind: 'state', ...s.summary() });
-    }
-    s.clients.add(client);
-    s.broadcastState();
-    const hb = setInterval(() => res.write(': hb\n\n'), HEARTBEAT_MS);
-    req.on('close', () => {
-      clearInterval(hb);
-      s.clients.delete(client);
-      s.updatedAt = Math.max(s.updatedAt, Date.now() - IDLE_CLOSE_MS / 2);   // vừa có người xem -> chưa tắt ngay
-      s.broadcastState();
-    });
-  }
-
   return http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://x');
-    const p = url.pathname;
+    const p = new URL(req.url, 'http://x').pathname;
     try {
-      if (p === '/v1/ping') {
-        const authed = !!authDevice(bearer(req));
-        return send(res, 200, { ok: true, app: 'theo-doi-token', version: VERSION, authed, ...(authed ? { host: os.hostname() } : {}) });
-      }
-      if (p === '/v1/pair' && req.method === 'POST') {
-        const b = await jsonBody(req);
-        return send(res, 200, { ...pair(String(b.code || '').trim(), b.name), host: os.hostname() });
-      }
-      if (!p.startsWith('/v1/')) return send(res, 404, { error: 'NOT_FOUND', message: 'Không có' });
       const hm = /^\/v1\/hook\/(stop|permission|prompt|tool|pretool)$/.exec(p);
-      if (hm && req.method === 'POST') {
-        const key = String(req.headers['x-hook-key'] || '');
-        const want = hookKey();
-        const ok = LOOPBACK.has(req.socket.remoteAddress) && key.length === want.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(want));
-        if (!ok) return send(res, 403, { error: 'FORBIDDEN', message: 'Sai khoá hook' });
-        const b = await jsonBody(req);
-        if (hm[1] === 'stop') return hub.hookStop(b, req, res);
-        if (hm[1] === 'permission') return hub.hookPermission(b, req, res);
-        if (hm[1] === 'tool' || hm[1] === 'pretool') return send(res, 200, hub.hookTool(b, hm[1] === 'pretool'));
-        return send(res, 200, hub.hookPrompt(b));
-      }
-      const dev = authDevice(bearer(req));
-      if (!dev) return send(res, 401, { error: 'UNAUTHORIZED', message: 'Thiết bị chưa ghép hoặc đã bị thu hồi' });
-
-      // ntfy phía PC chỉ còn cho đường cũ (Tailscale); qua hub thì hub lo thông báo
-      if (p === '/v1/ntfy' && req.method === 'POST') return send(res, 200, { ntfy: setNtfy(await jsonBody(req)) });
-      if (p === '/v1/ntfy/test' && req.method === 'POST') {
-        return send(res, 200, { ok: await hub.notify('CC Remote', 'Thông báo hoạt động bình thường', null) });
-      }
-      const sm = /^\/v1\/sessions\/([0-9a-f-]{36})\/events$/i.exec(p);
-      if (sm && req.method === 'GET') {
-        const s = hub.get(sm[1].toLowerCase());
-        if (!s) return send(res, 404, { error: 'NOT_FOUND', message: 'Không tìm thấy phiên' });
-        return stream(req, res, s, Number(url.searchParams.get('after')) || 0, url.searchParams.get('epoch') || '');
-      }
-      const r = httpRoute(req.method, p, url);
-      if (!r) return send(res, 404, { error: 'NOT_FOUND', message: 'Không có' });
-      const params = req.method === 'POST' ? { ...(await jsonBody(req)), ...r.params } : r.params;
-      return send(res, 200, await call(hub, r.method, params));
+      if (!hm || req.method !== 'POST') return send(res, 404, { error: 'NOT_FOUND', message: 'Không có' });
+      const key = String(req.headers['x-hook-key'] || '');
+      const want = hookKey();
+      const ok = LOOPBACK.has(req.socket.remoteAddress) && key.length === want.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(want));
+      if (!ok) return send(res, 403, { error: 'FORBIDDEN', message: 'Sai khoá hook' });
+      const b = await jsonBody(req);
+      if (hm[1] === 'stop') return hub.hookStop(b, req, res);
+      if (hm[1] === 'permission') return hub.hookPermission(b, req, res);
+      if (hm[1] === 'tool' || hm[1] === 'pretool') return send(res, 200, hub.hookTool(b, hm[1] === 'pretool'));
+      return send(res, 200, hub.hookPrompt(b));
     } catch (err) {
       if (err instanceof RemoteError) return send(res, err.status, { error: err.code, message: err.message });
       console.error('remote:', err);
@@ -1645,45 +1504,6 @@ function start(ctx = {}) {
   process.once('SIGTERM', bye);
   process.once('exit', () => hub.shutdown());
   return { hub, server };
-}
-
-// ---------- Tailscale (cho dashboard) ----------
-
-function tailscaleBin() {
-  if (process.platform === 'win32') {
-    const p = path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Tailscale', 'tailscale.exe');
-    if (fs.existsSync(p)) return p;
-  }
-  return 'tailscale';
-}
-
-function runTailscale(args, timeout = 8000) {
-  return new Promise((resolve) => {
-    execFile(tailscaleBin(), args, { timeout, windowsHide: true }, (err, stdout, stderr) => {
-      resolve({ ok: !err, code: err ? (typeof err.code === 'number' ? err.code : -1) : 0, missing: !!(err && err.code === 'ENOENT'), out: String(stdout || ''), err: String(stderr || '') });
-    });
-  });
-}
-
-async function tailscaleInfo() {
-  const st = await runTailscale(['status', '--json']);
-  if (st.missing) return { installed: false };
-  let j = null;
-  try { j = JSON.parse(st.out); } catch {}
-  if (!j || !j.Self) return { installed: true, running: false, message: clip((st.err || st.out).trim(), 300) };
-  const dns = String(j.Self.DNSName || '').replace(/\.$/, '');
-  const sv = await runTailscale(['serve', 'status', '--json']);
-  let serving = false;
-  try { serving = JSON.stringify(JSON.parse(sv.out || '{}')).includes(`:${REMOTE_PORT}`); } catch {}
-  return {
-    installed: true, running: j.BackendState === 'Running', state: j.BackendState,
-    dns, ips: j.Self.TailscaleIPs || [], serving, url: dns && serving ? `https://${dns}` : '',
-  };
-}
-
-async function tailscaleServe() {
-  const r = await runTailscale(['serve', '--bg', String(REMOTE_PORT)], 20000);
-  return { ok: r.ok, output: clip((r.out + '\n' + r.err).trim(), 1500) };
 }
 
 // ---------- cài hook vào Claude Code (điều khiển phiên đang mở trên máy) ----------
@@ -1775,25 +1595,16 @@ function uninstallHooks() {
 module.exports = {
   alwaysOn, setAlwaysOn, startIdleWatcher,
   hookKey, phoneTag, hooksStatus, installHooks, uninstallHooks,
-  RemoteError, load, newPairCode, pair, authDevice, devices, revoke, setNtfy, notify,
+  RemoteError, load,
   findClaude, normalize, cleanUserText, toolSummary, readTranscript, recentSessions, projects, projectSessions, sessionFile,
-  Session, createHub, createRemoteServer, call, sweepUploads, start, tailscaleInfo, tailscaleServe, REMOTE_PORT, MODES,
+  Session, createHub, createRemoteServer, call, subscribe, sweepUploads, start, REMOTE_PORT, MODES,
 };
 
 // ---------- dòng lệnh ----------
 
 if (require.main === module) {
   const [cmd, arg] = process.argv.slice(2);
-  if (cmd === 'pair') {
-    const p = newPairCode();
-    console.log(`Mã ghép: ${p.code}  (hết hạn lúc ${new Date(p.expiresAt).toLocaleTimeString()})`);
-  } else if (cmd === 'devices') {
-    const list = devices();
-    if (!list.length) console.log('Chưa ghép thiết bị nào. Chạy: node remote.js pair');
-    for (const d of list) console.log(`${d.id}  ${d.name}  ghép ${new Date(d.createdAt).toLocaleString()}  dùng lần cuối ${new Date(d.lastSeen).toLocaleString()}`);
-  } else if (cmd === 'revoke' && arg) {
-    try { revoke(arg); console.log('Đã thu hồi'); } catch (err) { console.error(err.message); process.exitCode = 2; }
-  } else if (cmd === 'hooks') {
+  if (cmd === 'hooks') {
     try {
       const st = arg === 'install' ? installHooks() : arg === 'uninstall' ? uninstallHooks() : hooksStatus();
       console.log(st.installed ? 'Hook CC Remote: đã cài (mở lại phiên Claude Code để có hiệu lực; gõ /phone để chuyển sang điện thoại)'
@@ -1802,7 +1613,7 @@ if (require.main === module) {
   } else if (cmd === 'serve') {
     start();
   } else {
-    console.error('Dùng: node remote.js [pair|devices|revoke <id>|hooks [install|uninstall]|serve]');
+    console.error('Dùng: node remote.js [hooks [install|uninstall]|serve]');
     process.exitCode = 1;
   }
 }

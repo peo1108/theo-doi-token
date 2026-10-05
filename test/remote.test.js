@@ -35,60 +35,35 @@ let base;
 test.before(() => new Promise((r) => server.listen(0, '127.0.0.1', () => { base = `http://127.0.0.1:${server.address().port}`; r(); })));
 test.after(() => { hub.shutdown(); server.close(); env.cleanup(); });
 
-let token = '';
-async function api(method, p, body, tok = token) {
-  const r = await fetch(base + p, {
-    method, headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: `Bearer ${tok}` } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  return { status: r.status, body: await r.json() };
+// Gọi lõi như app gửi qua hub. Đường dẫn kiểu REST chỉ để test dễ đọc; trả {status, body} (lỗi -> status của RemoteError).
+async function api(method, p, body) {
+  const fixed = { 'GET /v1/state': 'state', 'GET /v1/capabilities': 'capabilities', 'POST /v1/sessions': 'sessions.create',
+    'POST /v1/accounts/switch': 'accounts.switch', 'POST /v1/always-on': 'alwaysOn' };
+  let fn = fixed[`${method} ${p}`], params = { ...(body || {}) };
+  const m = /^\/v1\/sessions\/([0-9a-f-]{36})(?:\/(\w+))?$/i.exec(p);
+  if (!fn && m) { fn = m[2] ? `sessions.${m[2]}` : 'sessions.get'; params.id = m[1]; }
+  try { return { status: 200, body: await R.call(hub, fn, params) }; }
+  catch (e) { if (!(e instanceof R.RemoteError)) throw e; return { status: e.status, body: { error: e.code, message: e.message } }; }
 }
 
-// Đọc SSE cho tới khi cond(events) đúng.
+// Theo dõi phiên như app (qua subscribe) cho tới khi cond(events) đúng.
 function watch(id, cond, { after = 0, epoch = '' } = {}) {
   return new Promise((resolve, reject) => {
+    const s = hub.get(id);
+    if (!s) return reject(new Error('không có phiên ' + id));
     const events = [];
-    const req = http.get(`${base}/v1/sessions/${id}/events?after=${after}&epoch=${epoch}`, { headers: { Authorization: `Bearer ${token}` } }, (res) => {
-      let buf = '';
-      res.setEncoding('utf8');
-      res.on('data', (d) => {
-        buf += d;
-        let i;
-        while ((i = buf.indexOf('\n\n')) >= 0) {
-          const chunk = buf.slice(0, i);
-          buf = buf.slice(i + 2);
-          if (chunk.startsWith('data: ')) events.push(JSON.parse(chunk.slice(6)));
-          if (cond(events)) { req.destroy(); clearTimeout(t); return resolve(events); }
-        }
-      });
+    let done = false, off = null;
+    const t = setTimeout(() => { done = true; if (off) off(); reject(new Error('timeout: ' + JSON.stringify(events.map((e) => e.kind)))); }, 8000);
+    off = R.subscribe(s, { after, epoch }, (ev) => {
+      if (done) return;
+      events.push(JSON.parse(JSON.stringify(ev)));
+      if (cond(events)) { done = true; clearTimeout(t); if (off) off(); resolve(events); }
     });
-    req.on('error', () => {});
-    const t = setTimeout(() => { req.destroy(); reject(new Error('timeout: ' + JSON.stringify(events.map((e) => e.kind)))); }, 8000);
+    if (done) off();
   });
 }
 const has = (kind, f = () => true) => (evs) => evs.some((e) => e.kind === kind && f(e));
 const until = async (fn, ms = 5000) => { const t0 = Date.now(); while (!fn()) { if (Date.now() - t0 > ms) throw new Error('until timeout'); await new Promise((r) => setTimeout(r, 20)); } };
-
-test('ghép thiết bị: mã đúng cấp token, sai 5 lần thì huỷ mã, không token -> 401', async () => {
-  assert.equal((await api('GET', '/v1/state', null, '')).status, 401);
-  assert.equal((await api('POST', '/v1/pair', { code: '000000' })).body.error, 'PAIR_EXPIRED');
-  const { code } = R.newPairCode();
-  const wrong = code === '111111' ? '222222' : '111111';
-  for (let i = 0; i < 4; i++) assert.equal((await api('POST', '/v1/pair', { code: wrong })).body.error, 'PAIR_WRONG');
-  const ok = await api('POST', '/v1/pair', { code, name: 'iPhone test' });
-  assert.equal(ok.status, 200);
-  token = ok.body.token;
-  assert.ok(token.length > 30);
-  assert.equal((await api('POST', '/v1/pair', { code })).body.error, 'PAIR_EXPIRED');   // mã dùng một lần
-  const raw = fs.readFileSync(path.join(env.dataDir, 'remote.json'), 'utf8');
-  assert.ok(!raw.includes(token), 'không lưu token thô');
-  assert.equal((await api('GET', '/v1/ping')).body.authed, true);
-
-  const c2 = R.newPairCode().code;
-  const bad = c2 === '111111' ? '222222' : '111111';
-  for (let i = 0; i < 5; i++) await api('POST', '/v1/pair', { code: bad });
-  assert.equal((await api('POST', '/v1/pair', { code: c2 })).body.error, 'PAIR_EXPIRED');
-});
 
 test('phiên mới: gửi, nhận echo, gửi tiếp dùng cùng tiến trình', async () => {
   const r = await api('POST', '/v1/sessions', { cwd: WORK, text: 'xin chào', mode: 'acceptEdits' });
@@ -103,7 +78,7 @@ test('phiên mới: gửi, nhận echo, gửi tiếp dùng cùng tiến trình',
 
   const last = evs.filter((e) => e.seq).pop().seq;
   await api('POST', `/v1/sessions/${id}/send`, { text: 'lần hai' });
-  const evs2 = await watch(id, has('assistant', (e) => e.text === 'echo: lần hai'), { after: last, epoch: evs.find((e) => e.kind === 'state').epoch });
+  const evs2 = await watch(id, (e) => has('assistant', (x) => x.text === 'echo: lần hai')(e) && has('result')(e), { after: last, epoch: evs.find((e) => e.kind === 'state').epoch });
   assert.ok(evs2.every((e) => !e.seq || e.seq > last), 'chỉ phát lại sự kiện mới');
   assert.equal(fs.readFileSync(ARGS_FILE, 'utf8').trim().split('\n').length, 1, 'không mở thêm tiến trình');
 
@@ -136,7 +111,8 @@ test('duyệt quyền: allow / always / deny và AskUserQuestion có answers', a
   const q = evs.filter((e) => e.kind === 'permission').pop();
   assert.equal(q.questions[0].options[1].label, 'Xanh');
   await api('POST', `/v1/sessions/${id}/permission`, { requestId: q.requestId, decision: 'allow', answers: { 'Màu gì?': 'Xanh' } });
-  await watch(id, has('assistant', (e) => e.text === 'allowed {"Màu gì?":"Xanh"} perms=0'));
+  // chờ hết lượt khi vẫn đang xem (không thì 'Xong' đẩy thông báo lọt sang test sau)
+  await watch(id, (e) => { const i = e.findIndex((x) => x.kind === 'assistant' && x.text === 'allowed {"Màu gì?":"Xanh"} perms=0'); return i >= 0 && e.slice(i).some((x) => x.kind === 'result'); });
 });
 
 test('không ai xem: xin quyền và xong lượt thì đẩy thông báo', async () => {
@@ -204,7 +180,7 @@ test('hết hạn mức: báo limit kèm gợi ý; đổi tài khoản khởi đ
 test('lỗi đầu vào: thư mục không tồn tại, phiên lạ, tin nhắn trống', async () => {
   assert.equal((await api('POST', '/v1/sessions', { cwd: path.join(WORK, 'khong-co'), text: 'x' })).body.error, 'NO_CWD');
   assert.equal((await api('POST', '/v1/sessions', { cwd: 'relative', text: 'x' })).body.error, 'NO_CWD');
-  assert.equal((await api('GET', '/v1/sessions/00000000-0000-0000-0000-000000000000/events')).status, 404);
+  assert.equal((await api('GET', '/v1/sessions/00000000-0000-0000-0000-000000000000')).status, 404);
   const { body } = await api('POST', '/v1/sessions', { cwd: WORK, text: 'a' });
   assert.equal((await api('POST', `/v1/sessions/${body.id}/send`, { text: '  ' })).body.error, 'EMPTY');
 });
@@ -727,4 +703,12 @@ test('dọn ảnh cũ hơn 7 ngày trong data/uploads', () => {
   R.sweepUploads(Date.now());
   assert.ok(!fs.existsSync(old));
   assert.ok(fs.existsSync(fresh));
+});
+
+test('server trên máy chỉ còn cho hook: không còn API điện thoại kiểu cũ (Tailscale, mã ghép)', async () => {
+  for (const [m, p] of [['GET', '/v1/state'], ['GET', '/v1/ping'], ['POST', '/v1/pair'], ['GET', '/v1/projects'], ['POST', '/v1/sessions']]) {
+    const r = await fetch(base + p, { method: m, headers: { 'Content-Type': 'application/json' }, body: m === 'POST' ? '{}' : undefined });
+    assert.equal(r.status, 404, `${m} ${p}`);
+  }
+  for (const k of ['newPairCode', 'pair', 'authDevice', 'devices', 'setNtfy', 'tailscaleInfo', 'tailscaleServe']) assert.equal(R[k], undefined, k);
 });

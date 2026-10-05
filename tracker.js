@@ -636,7 +636,7 @@ async function accountsApi(req, url, json) {
   return true;
 }
 
-// ---------- hub trên VPS (thay cho Tailscale): PC kết nối ra hub ----------
+// ---------- hub trên VPS: PC kết nối ra hub, điện thoại đi qua hub ----------
 
 const HUB_FILE = path.join(DATA_DIR, 'hub.json');
 const DEFAULT_HUB = 'https://clauderc.caesarvn.xyz';
@@ -699,31 +699,20 @@ async function hubApi(req, url, json) {
   return true;
 }
 
-// Xử lý /api/remote*: ghép điện thoại, thu hồi, ntfy, Tailscale. Cùng luật như /api/accounts (POST chỉ từ dashboard).
-let tsCache = null;
+// Xử lý /api/remote*: trạng thái điện thoại / hub, hook VS Code, luôn sẵn sàng. POST chỉ từ dashboard (guardPost).
 async function remoteApi(req, url, json) {
   if (url.pathname === '/api/remote' && req.method === 'GET') {
-    if (!tsCache || Date.now() - tsCache.t > 30e3 || url.searchParams.has('fresh')) {
-      tsCache = { t: Date.now(), v: await remote.tailscaleInfo().catch((err) => ({ installed: false, message: err.message })) };
-    }
-    const d = remote.load();
-    const pair = d.pair && d.pair.expiresAt > Date.now() ? { code: d.pair.code, expiresAt: d.pair.expiresAt } : null;
     const live = remoteHub ? [...remoteHub.sessions.values()].filter((x) => x.proc).length : 0;
-    return json({ port: remote.REMOTE_PORT, enabled: !!remoteHub, devices: remote.devices(), pair, ntfy: d.ntfy, tailscale: tsCache.v, live, hooks: remote.hooksStatus(), alwaysOn: remote.alwaysOn(), hub: hubInfo() }), true;
+    return json({ enabled: !!remoteHub, live, hooks: remote.hooksStatus(), alwaysOn: remote.alwaysOn(), hub: hubInfo() }), true;
   }
-  const m = /^\/api\/remote\/(pair|revoke|ntfy|ntfy-test|serve|hooks|always-on)$/.exec(url.pathname);
+  const m = /^\/api\/remote\/(hooks|always-on)$/.exec(url.pathname);
   if (!m || req.method !== 'POST') return null;
   if (!guardPost(req)) return false;
   let body;
   try { body = JSON.parse(await readBody(req) || '{}'); } catch { body = {}; }
   if (!body || typeof body !== 'object') body = {};
-  if (m[1] === 'pair') json(remote.newPairCode());
-  else if (m[1] === 'revoke') json(remote.revoke(String(body.id || '')));
-  else if (m[1] === 'ntfy') json({ ntfy: remote.setNtfy(body) });
-  else if (m[1] === 'always-on') json({ alwaysOn: remote.setAlwaysOn(body.on !== false) });
-  else if (m[1] === 'hooks') json(body.on === false ? remote.uninstallHooks() : remote.installHooks());
-  else if (m[1] === 'ntfy-test') json({ ok: await remote.notify('CC Remote', 'Thông báo hoạt động bình thường', null) });
-  else { const r = await remote.tailscaleServe(); tsCache = null; json(r); }
+  if (m[1] === 'always-on') json({ alwaysOn: remote.setAlwaysOn(body.on !== false) });
+  else json(body.on === false ? remote.uninstallHooks() : remote.installHooks());
   return true;
 }
 
