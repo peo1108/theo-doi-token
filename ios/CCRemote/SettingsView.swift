@@ -3,7 +3,7 @@ import UserNotifications
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var app
-    @Environment(.dismiss) private var dismiss
+    @Environment(\.dismiss) private var dismiss
     @State private var notifyOn = Notifier.shared.enabled
     @State private var keepAlive = KeepAlive.shared.enabled
     @State private var notifyStatus: UNAuthorizationStatus = .notDetermined
