@@ -149,9 +149,9 @@ struct SessionView: View {
                          : "Hook đã bị dừng (bấm Stop trong VS Code?) — gõ một tin bất kỳ trong VS Code để bật lại")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text(attached ? "Duyệt quyền: trên điện thoại" : s.pcAway == true ? "Duyệt quyền: trên điện thoại (máy đang để yên)" : "Duyệt quyền: trên máy tính (đang có người dùng máy)")
+                    Text(attached ? "Duyệt quyền: trên điện thoại" : s.pcAway == true ? "Duyệt quyền: trên điện thoại (máy đang để yên)" : s.mirror == true ? "Duyệt quyền: máy tính hoặc điện thoại, bên nào trước" : "Duyệt quyền: trên máy tính (đang có người dùng máy)")
                         .font(.caption2)
-                        .foregroundStyle(attached || s.pcAway == true ? Color.accentColor : Color.secondary)
+                        .foregroundStyle(attached || s.pcAway == true || s.mirror == true ? Color.accentColor : Color.secondary)
                 }
                 Spacer(minLength: 4)
                 Menu {
@@ -457,7 +457,7 @@ struct PermissionCard: View {
             }
 
             if let decision {
-                Label(decidedText(decision), systemImage: decision == "deny" || decision == "cancel" ? "xmark.circle" : "checkmark.circle")
+                Label(decidedText(decision), systemImage: decision == "pc" ? "desktopcomputer" : decision == "deny" || decision == "cancel" ? "xmark.circle" : "checkmark.circle")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -489,6 +489,7 @@ struct PermissionCard: View {
         case "allow": return isQuestion ? "Đã trả lời" : isPlan ? "Đã duyệt kế hoạch" : "Đã cho phép"
         case "always": return "Đã cho phép (cả phiên)"
         case "deny": return isQuestion ? "Đã bỏ qua" : "Đã từ chối"
+        case "pc": return "Đã trả lời trên máy tính"
         default: return "Đã huỷ"
         }
     }

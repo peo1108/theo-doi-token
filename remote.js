@@ -662,6 +662,7 @@ class Session {
       settings: this.effective(), account: this.caps && this.caps.account ? this.caps.account.email : null,
       external: ext, source: ext ? (b.entrypoint === 'claude-vscode' ? 'VS Code' : b.entrypoint === 'cli' ? 'Terminal' : 'Máy tính') : null,
       attached: ext ? b.attached : false, ready: ext ? !!b.parked : false, pcAway: ext ? this.hub.pcAway() : false,
+      mirror: ext ? (b.attached || alwaysOn() || this.hub.pcAway()) : false,   // xin quyền hiện cả trên điện thoại
       id: this.id, cwd: this.cwd, project: this.cwd ? path.basename(this.cwd) : '', title: this.title,
       status: ext ? this.externalStatus() : this.status, live: !!this.proc || ext, pending: this.pending.size, mode: this.mode, model: this.model,
       rate: this.rate, cost: this.cost, lastText: this.lastText, updatedAt: this.updatedAt, epoch: this.epoch,
@@ -870,10 +871,28 @@ class Session {
     if (p.tool === 'ExitPlanMode' && typeof p.input.plan === 'string') ev.plan = clip(p.input.plan, 20000);
     this.store(ev);
     this.setStatus('waiting');
-    if (this.clients.size === 0) {
-      const what = p.tool === 'AskUserQuestion' ? 'Claude đang hỏi bạn' : p.tool === 'ExitPlanMode' ? 'Kế hoạch chờ duyệt' : `Cần duyệt ${p.tool}`;
-      this.hub.notify(`${what} · ${this.label()}`, clip(ev.summary, 140), this.id);
+    if (this.clients.size === 0 && !p.quiet) this.permNotify(p);
+  }
+
+  permNotify(p) {
+    const what = p.tool === 'AskUserQuestion' ? 'Claude đang hỏi bạn' : p.tool === 'ExitPlanMode' ? 'Kế hoạch chờ duyệt' : `Cần duyệt ${p.tool}`;
+    this.hub.notify(`${what} · ${this.label()}`, clip(toolSummary(p.tool, p.input), 140), this.id);
+  }
+
+  // Xin quyền của phiên trên máy đang hiện trên điện thoại: thôi chờ (hook không quyết định, hộp thoại VS Code lo).
+  // keep(p) -> true thì giữ lại.
+  dropHookPerms(decision = 'cancel', keep = () => false) {
+    let n = 0;
+    for (const [id, p] of [...this.pending]) {
+      if (!p.hook || keep(p)) continue;
+      this.pending.delete(id);
+      clearInterval(p.hook.keepAlive);
+      try { p.hook.res.end(JSON.stringify({ decision: null })); } catch {}
+      this.store({ kind: 'decided', requestId: id, decision });
+      n++;
     }
+    if (n) this.broadcastState();
+    return n;
   }
 
   refreshStatus() {
@@ -945,15 +964,8 @@ class Session {
     if (on) {
       this.store({ kind: 'note', text: 'Đang điều khiển phiên trên máy từ điện thoại' });
     } else {
-      if (!alwaysOn()) { this.release({ action: 'continue' }); b.queue = []; }
-      // quyền đang chờ: trả về hộp thoại trên máy
-      for (const [id, p] of this.pending) {
-        if (!p.hook) continue;
-        this.pending.delete(id);
-        clearInterval(p.hook.keepAlive);
-        try { p.hook.res.end(JSON.stringify({ decision: null })); } catch {}
-        this.store({ kind: 'decided', requestId: id, decision: 'cancel' });
-      }
+      // tắt luôn sẵn sàng: quyền đang chờ chỉ còn hộp thoại trên máy (bật thì vẫn hiện cả hai nơi)
+      if (!alwaysOn()) { this.release({ action: 'continue' }); b.queue = []; this.dropHookPerms(); }
       this.store({ kind: 'note', text: reason || 'Đã thả phiên về máy tính' });
     }
     this.broadcastState();
@@ -1147,6 +1159,7 @@ function createHub(ctx = {}) {
       const br = s.bridge;
       br.busy = false;
       br.stopReq = false;   // lượt đã kết thúc: không còn gì để dừng
+      s.dropHookPerms('pc');   // còn xin quyền treo trên điện thoại -> đã trả lời trên máy
       s.tail();
       if (!br.attached && !alwaysOn()) { s.broadcastState(); return res.end(JSON.stringify({ action: 'continue' })); }
       if (br.queue.length) {
@@ -1165,16 +1178,21 @@ function createHub(ctx = {}) {
       // báo khi người dùng không ở máy (đang điều khiển từ điện thoại hoặc máy để yên)
       if (s.clients.size === 0 && (br.attached || hub.pcAway())) hub.notify(`Xong · ${s.label()}`, clip(b.last || s.lastText, 180), s.id);
     },
-    // Hook PermissionRequest: điện thoại đang điều khiển hoặc người dùng đã rời máy -> hỏi trên điện thoại;
-    // đang ngồi ở máy -> để VS Code hỏi như thường.
+    // Hook PermissionRequest chạy song song với hộp thoại trong VS Code: bên nào trả lời trước thì được.
+    // Đang điều khiển từ điện thoại / rời máy / luôn sẵn sàng -> hiện cả trên điện thoại; chỉ đẩy thông báo khi không
+    // ngồi máy (ngồi máy rồi bỏ đi thì setIdle báo sau). Tắt luôn sẵn sàng và đang ngồi máy -> chỉ VS Code hỏi.
     hookPermission(b, req, res) {
       const s = hub.bridgeFor(b);
-      if (!s.bridge.attached && !hub.pcAway()) return res.end(JSON.stringify({ decision: null }));
+      const remote = s.bridge.attached || hub.pcAway();
+      if (!remote && !alwaysOn()) return res.end(JSON.stringify({ decision: null }));
       s.tail();
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       const hook = { res, keepAlive: setInterval(() => { try { res.write(' '); } catch {} }, 20e3) };
       const requestId = `hook-${crypto.randomBytes(6).toString('hex')}`;
-      s.askPermission({ requestId, tool: String(b.tool_name || 'Tool'), input: b.tool_input || {}, suggestions: b.permission_suggestions, hook });
+      s.askPermission({
+        requestId, tool: String(b.tool_name || 'Tool'), input: b.tool_input || {}, suggestions: b.permission_suggestions, hook,
+        inputKey: String(b.input_key || ''), quiet: !remote,
+      });
       req.on('close', () => {
         clearInterval(hook.keepAlive);
         if (s.pending.get(requestId) === undefined) return;
@@ -1190,6 +1208,8 @@ function createHub(ctx = {}) {
       const br = s.bridge;
       br.busy = true;
       s.fileChangedAt = Date.now();
+      // tool vừa chạy xong đúng là cái đang chờ duyệt trên điện thoại -> đã cho phép trên máy
+      if (!pre && b.input_key) s.dropHookPerms('pc', (p) => p.inputKey !== b.input_key);
       if (br.stopReq) {
         br.stopReq = false;
         s.store({ kind: 'note', text: 'Đã dừng theo yêu cầu từ điện thoại' });
@@ -1211,6 +1231,7 @@ function createHub(ctx = {}) {
       s.bridge.busy = true;
       // lượt mới bắt đầu từ máy: hook Stop chạy nền của lượt trước thôi chờ (lượt này xong sẽ có hook mới)
       s.release({ action: 'continue' });
+      s.dropHookPerms('pc');
       if (/^\s*\/phone\b/i.test(p) || p.includes('[[cc-remote:phone]]')) s.attach(true);
       else if (s.bridge.attached) s.attach(false, 'Bạn vừa gõ trên máy — đã thả phiên về máy tính');
       else s.broadcastState();
@@ -1222,18 +1243,14 @@ function createHub(ctx = {}) {
     setIdle(ms) {
       const wasAway = hub.pcAway();
       hub.idleMs = ms;
-      // vừa quay lại máy: quyền đang hỏi trên điện thoại (do rời máy, không phải đang điều khiển) -> trả về VS Code
-      if (ms != null && ms < 3000) {
+      // vừa rời máy: xin quyền đang hiện (lặng lẽ) trên điện thoại lúc còn ngồi máy -> giờ mới đẩy thông báo.
+      // Quay lại máy thì không cần làm gì: hộp thoại VS Code vẫn ở đó song song.
+      if (!wasAway && hub.pcAway()) {
         for (const s of sessions.values()) {
-          if (!s.bridge || s.bridge.attached) continue;
-          for (const [id, p] of [...s.pending]) {
-            if (!p.hook) continue;
-            s.pending.delete(id);
-            clearInterval(p.hook.keepAlive);
-            try { p.hook.res.end(JSON.stringify({ decision: null })); } catch {}
-            s.store({ kind: 'decided', requestId: id, decision: 'cancel' });
-            s.store({ kind: 'note', text: 'Bạn đã quay lại máy — hỏi quyền trên VS Code' });
-            s.broadcastState();
+          for (const p of s.pending.values()) {
+            if (!p.hook || !p.quiet) continue;
+            p.quiet = false;
+            if (s.clients.size === 0) s.permNotify(p);
           }
         }
       }
@@ -1362,7 +1379,7 @@ async function jsonBody(req) {
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
-// ---------- lõi dùng chung: HTTP cũ (Tailscale) và hub (hub-link.js) đều gọi call() ----------
+// ---------- lõi dùng chung: hub (hub-link.js) gọi call() ----------
 
 const SESSION_METHODS = ['sessions.get', 'sessions.image', 'sessions.send', 'sessions.permission', 'sessions.interrupt', 'sessions.mode',
   'sessions.model', 'sessions.settings', 'sessions.attach', 'sessions.close'];

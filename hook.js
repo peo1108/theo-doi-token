@@ -26,6 +26,9 @@ function readKey() {
 }
 
 // Mã riêng của máy đi kèm mọi tin từ điện thoại (cùng công thức với phoneTag trong remote.js).
+// Dấu của tool_input: ghép lần xin quyền với PostToolUse của đúng tool đó (đã cho phép trên máy).
+const inputKey = (x) => crypto.createHash('sha256').update(JSON.stringify(x ?? null)).digest('hex').slice(0, 16);
+
 const phoneTag = (key) => crypto.createHash('sha256').update(`cc-remote-tag:${key}`).digest('hex').slice(0, 8);
 
 // POST tới remote.js. Server có thể giữ kết nối rất lâu (chờ điện thoại) và gửi khoảng trắng để giữ kết nối.
@@ -77,10 +80,10 @@ process.stdin.on('end', async () => {
     // mã 2 + stderr: hook chạy nền (asyncRewake) thì đánh thức Claude; hook chặn (Claude Code cũ) thì Claude làm tiếp
     if (r && r.action === 'message' && r.text) return process.stderr.write(r.text, () => process.exit(2));
   } else if (event === 'permission') {
-    r = await post('permission', { ...base, tool_name: j.tool_name, tool_input: j.tool_input, permission_suggestions: j.permission_suggestions });
+    r = await post('permission', { ...base, tool_name: j.tool_name, tool_input: j.tool_input, permission_suggestions: j.permission_suggestions, input_key: inputKey(j.tool_input) });
     if (r && r.decision) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: r.decision } }));
   } else if (event === 'tool' || event === 'pretool') {
-    r = await post(event, { ...base, tool_name: j.tool_name });
+    r = await post(event, { ...base, tool_name: j.tool_name, input_key: inputKey(j.tool_input) });
     if (r && r.stop) process.stdout.write(JSON.stringify({ continue: false, stopReason: r.reason || 'Đã dừng từ điện thoại' }));
     // systemMessage: hiện tin nhắn cho người ở máy thấy (reason chỉ Claude đọc)
     else if (r && r.inject) process.stdout.write(JSON.stringify({ decision: 'block', reason: r.inject, ...(r.show ? { systemMessage: `📱 Từ điện thoại: ${r.show}` } : {}) }));

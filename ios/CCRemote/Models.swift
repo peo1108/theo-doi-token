@@ -110,6 +110,7 @@ struct SessionSummary: Codable, Identifiable, Hashable {
     let attached: Bool?
     let ready: Bool?
     let pcAway: Bool?
+    let mirror: Bool?
     let thinking: ThinkingInfo?
     let ask: AskInfo?
     let cwd: String?

@@ -418,9 +418,31 @@ test('luôn sẵn sàng: không cần /phone, gõ ở máy thì nhả hook, rờ
   assert.equal(r.out, '');
   assert.equal(hub.get(id, { load: false })?.bridge?.parked, null);
 
-  // đang ở máy: xin quyền để VS Code hỏi
-  r = await runHook('permission', { ...base, tool_name: 'Bash', tool_input: { command: 'ls' } });
+  // đang ở máy: VS Code hỏi, điện thoại cũng hiện (song song, không đẩy thông báo); bấm cho phép trên máy -> tool chạy
+  // -> PostToolUse của đúng tool đó gỡ câu hỏi khỏi điện thoại, hook thôi chờ mà không quyết định
+  const notes = [];
+  const realNotify = hub.notify;
+  hub.notify = async (title) => { notes.push(title); return true; };
+  let perm = runHook('permission', { ...base, tool_name: 'Bash', tool_input: { command: 'ls' } });
+  let pe = (await watch(id, has('permission', (e) => e.tool === 'Bash'))).filter((e) => e.kind === 'permission').pop();
+  assert.ok(pe, 'điện thoại thấy câu hỏi dù đang ngồi máy');
+  assert.equal(notes.length, 0, 'ngồi máy: không đẩy thông báo');
+  await runHook('tool', { ...base, tool_name: 'Read', tool_input: { file_path: 'x' } });
+  assert.equal(hub.get(id, { load: false }).pending.size, 1, 'tool khác chạy xong không gỡ');
+  await runHook('tool', { ...base, tool_name: 'Bash', tool_input: { command: 'ls' } });
+  r = await perm;
   assert.equal(r.out, '');
+  assert.equal(hub.get(id, { load: false }).pending.size, 0);
+
+  // ngồi máy lúc hỏi rồi bỏ đi -> lúc đó mới đẩy thông báo; điện thoại trả lời được
+  perm = runHook('permission', { ...base, tool_name: 'Bash', tool_input: { command: 'rm x' } });
+  pe = (await watch(id, has('permission', (e) => e.tool === 'Bash' && e.summary.includes('rm')))).filter((e) => e.kind === 'permission').pop();
+  hub.setIdle(60e3);
+  assert.equal(notes.length, 1);
+  await api('POST', `/v1/sessions/${id}/permission`, { requestId: pe.requestId, decision: 'deny' });
+  assert.equal(JSON.parse((await perm).out).hookSpecificOutput.decision.behavior, 'deny');
+  hub.setIdle(500);
+  hub.notify = realNotify;
 
   // điện thoại nhắn lúc phiên đang chờ -> đưa vào ngay
   parked = runHook('stop', base);
@@ -431,8 +453,8 @@ test('luôn sẵn sàng: không cần /phone, gõ ở máy thì nhả hook, rờ
   assert.ok(r.err.endsWith('nhắn từ điện thoại'));
 
   // điện thoại đã nhắn -> đang điều khiển -> xin quyền hỏi trên điện thoại kể cả khi ngồi ở máy
-  let perm = runHook('permission', { ...base, tool_name: 'Write', tool_input: { file_path: 'a.txt' } });
-  let pe = (await watch(id, has('permission', (e) => e.tool === 'Write'))).filter((e) => e.kind === 'permission').pop();
+  perm = runHook('permission', { ...base, tool_name: 'Write', tool_input: { file_path: 'a.txt' } });
+  pe = (await watch(id, has('permission', (e) => e.tool === 'Write'))).filter((e) => e.kind === 'permission').pop();
   await api('POST', `/v1/sessions/${id}/permission`, { requestId: pe.requestId, decision: 'allow' });
   assert.equal(JSON.parse((await perm).out).hookSpecificOutput.decision.behavior, 'allow');
 
@@ -442,14 +464,20 @@ test('luôn sẵn sàng: không cần /phone, gõ ở máy thì nhả hook, rờ
   await api('POST', `/v1/sessions/${id}/attach`, { on: false });
   assert.ok(hub.get(id, { load: false })?.bridge?.parked, 'vẫn chờ');
 
-  // rời máy (không thao tác > 45 giây) -> xin quyền hỏi trên điện thoại; quay lại máy -> trả về VS Code
+  // rời máy (không thao tác > 45 giây) -> xin quyền hỏi trên điện thoại; quay lại máy vẫn hiện cả hai nơi;
+  // lượt kết thúc (đã trả lời trên máy) -> gỡ khỏi điện thoại
   hub.setIdle(60e3);
   assert.equal((await api('GET', '/v1/state')).body.pcAway, true);
   perm = runHook('permission', { ...base, tool_name: 'Edit', tool_input: { file_path: 'b.txt' } });
   pe = (await watch(id, has('permission', (e) => e.tool === 'Edit'))).filter((e) => e.kind === 'permission').pop();
   assert.ok(pe);
   hub.setIdle(800);
-  assert.equal((await perm).out, '', 'quay lại máy -> hook không quyết định, VS Code hỏi');
+  assert.equal(hub.get(id, { load: false }).pending.size, 1, 'quay lại máy: điện thoại vẫn hiện');
+  hub.get(id, { load: false }).release({ action: 'continue' });
+  await parked;
+  parked = runHook('stop', base);
+  assert.equal((await perm).out, '', 'Stop -> hook không quyết định');
+  assert.equal(hub.get(id, { load: false }).pending.size, 0);
 
   // tắt luôn sẵn sàng: hook Stop đang chờ không bị ép thả, lần sau thì cho qua
   hub.get(id, { load: false }).release({ action: 'continue' });
