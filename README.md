@@ -15,7 +15,7 @@ Chỉ cần Node.js, không cài thêm gói nào.
 Gỡ: chạy `autostart.ps1 -Uninstall`, chuột phải icon khay → Thoát, rồi xoá thư mục. Nếu đã dùng tính năng nhiều tài khoản,
 xoá thêm `%USERPROFILE%\.claude\account-profiles\` (chứa token đăng nhập đã lưu).
 
-**Riêng tư:** mọi số liệu nằm trên máy bạn (`data/`). Dashboard chỉ nghe ở 127.0.0.1. Kết nối ra ngoài duy nhất là hỏi
+**Riêng tư:** mọi số liệu nằm trên máy bạn (`data/`). Dashboard chỉ nghe ở 127.0.0.1 (server cho điện thoại cũng vậy, ra ngoài qua Tailscale). Kết nối ra ngoài duy nhất là hỏi
 hạn mức 5h/tuần ở `api.anthropic.com` bằng chính token Claude Code của bạn (giống lệnh `/usage`).
 
 ## Chạy
@@ -29,6 +29,7 @@ hạn mức 5h/tuần ở `api.anthropic.com` bằng chính token Claude Code c�
 | Dòng trạng thái | `node tracker.js status` |
 | Số liệu Prometheus | `node tracker.js metrics` hoặc http://127.0.0.1:7788/metrics |
 | Chạy test | `node --test "test/*.test.js"` |
+| Ghép điện thoại | dashboard → thẻ Điện thoại, hoặc `node remote.js pair` |
 | Đổi tài khoản Claude Code | `cc-switch` (thêm thư mục dự án vào PATH) — xem [Nhiều tài khoản](#nhiều-tài-khoản) |
 
 Icon khay: xám = chưa mở cửa sổ 5 giờ · xanh = bình thường · vàng = cao hơn trung bình · đỏ = vượt ngưỡng/ngân sách.
@@ -44,6 +45,9 @@ Nháy đúp để mở dashboard.
 | `dashboard.html` | giao diện |
 | `models.json` | bảng giá & màu từng model — sửa ở đây khi giá đổi hoặc có model mới |
 | `accounts.js` | hồ sơ tài khoản, đổi đăng nhập, dòng thời gian đổi (lõi của `cc-switch` và API `/api/accounts`) |
+| `remote.js` | điều khiển từ điện thoại: phiên Claude, ghép thiết bị, ntfy (xem [Điện thoại](#điện-thoại-cc-remote)) |
+| `ios/` | app iOS CC Remote (SwiftUI, build bằng GitHub Actions) |
+| `data/remote.json` | thiết bị đã ghép (token dạng băm), mã ghép, topic ntfy |
 | `cc-switch.cmd` | lệnh đổi tài khoản trong terminal |
 | `tray.ps1`, `autostart.ps1`, `start.bat` | icon khay & tự chạy |
 | `tray-ui.ps1` | giao diện menu khay (dot-source từ `tray.ps1`) |
@@ -109,6 +113,46 @@ một hồ sơ và đổi bằng cách ghi đè `claudeAiOauth` trong `.credenti
 - **Khôi phục tay**: `account-profiles/backup/` giữ 5 bản sao lưu gần nhất (cặp `<dấu thời gian>-credentials.json` +
   `<dấu thời gian>-claude.json`, trước mỗi lần ghi); chép đè lại `~/.claude/.credentials.json` và `~/.claude.json`
   (thư mục home, không nằm trong `~/.claude`; nếu đặt `CLAUDE_CONFIG_DIR` thì là hai file trong thư mục đó).
+
+## Điện thoại (CC Remote)
+
+Điều khiển Claude Code trên máy tính từ iPhone, thay cho Remote Control chính chủ (vốn gắn với một tài khoản). Phiên chạy
+trên máy tính, điện thoại chỉ gửi lời nhắn và nhận kết quả, nên đổi tài khoản giữa chừng vẫn tiếp tục đúng phiên đó.
+
+**App làm được:** mở phiên mới ở thư mục dự án bất kỳ · mở lại phiên cũ (kể cả phiên chạy trong terminal) · xem trả lời,
+tool đang chạy, kết quả · **duyệt quyền** (Cho phép / Luôn cho phép / Từ chối), trả lời câu hỏi của Claude, duyệt kế
+hoạch · ngắt · đổi chế độ quyền và model · xem % hạn mức 5h/7 ngày · **hết hạn mức → "Đổi sang X & tiếp tục"** (đổi
+tài khoản, khởi động lại phiên với `--resume` rồi gửi "tiếp tục").
+
+### Cài đặt (một lần)
+
+1. **Tailscale** (miễn phí): cài trên máy tính (`winget install tailscale.tailscale`) và iPhone (App Store), đăng nhập
+   cùng một tài khoản.
+2. **App iOS**: tải `CCRemote-unsigned.ipa` ở release
+   [`ios-latest`](https://github.com/peo1108/theo-doi-token/releases/tag/ios-latest), ký và cài bằng ESign.
+3. Mở dashboard → thẻ **Điện thoại**:
+   - bấm **Mở cho điện thoại** (tương đương `tailscale serve --bg 7789`; lần đầu Tailscale có thể yêu cầu bật HTTPS
+     cho tailnet theo đường link nó in ra), rồi chép địa chỉ `https://<máy>.<tailnet>.ts.net`;
+   - bấm **Tạo mã ghép** (hoặc `node remote.js pair`), nhập địa chỉ + mã 6 số vào app.
+4. Tuỳ chọn, **thông báo khi app đóng**: cài app **ntfy**, đặt một topic bí mật (dashboard hoặc Cài đặt trong app) và
+   đăng ký đúng topic đó trong ntfy. Máy tính sẽ báo khi Claude xin quyền, hỏi bạn, hết hạn mức hoặc xong việc mà app
+   không mở. Chỉ gửi tiêu đề ngắn qua ntfy.sh, không gửi code.
+
+### Cách hoạt động
+
+- `tracker.js serve` (khay đã tự chạy) mở thêm server `127.0.0.1:7789` (`REMOTE=0` để tắt, `REMOTE_PORT` để đổi cổng).
+  Server chỉ nghe ở loopback; `tailscale serve` đưa nó ra tailnet với HTTPS, nên chỉ thiết bị của bạn vào được.
+- Mỗi phiên là một tiến trình `claude -p --input-format stream-json --output-format stream-json
+  --permission-prompt-tool stdio`; xin quyền đi qua `can_use_tool` tới điện thoại. Phiên rảnh 30 phút mà không ai xem
+  thì tự tắt, tin nhắn sau sẽ mở lại bằng `--resume` (lịch sử vẫn đủ).
+- Mọi API cần token thiết bị (cấp khi ghép, máy tính chỉ lưu dạng băm trong `data/remote.json`). Mã ghép dùng một lần,
+  hết hạn sau 10 phút, sai 5 lần thì huỷ. Thu hồi thiết bị: nút **Thu hồi** trên dashboard hoặc `node remote.js revoke <id>`.
+- **Đổi tài khoản từ điện thoại** dùng đúng cơ chế `cc-switch`. Phiên mở từ điện thoại được khởi động lại khi rảnh để
+  dùng tài khoản mới; phiên trong terminal/VS Code vẫn như mục [Nhiều tài khoản](#nhiều-tài-khoản).
+- Đừng gửi tin vào cùng một phiên từ cả terminal lẫn điện thoại cùng lúc (hai tiến trình cùng ghi một lịch sử).
+
+**Build app** (không cần Mac): mỗi lần đẩy thay đổi trong `ios/` lên GitHub, workflow `.github/workflows/ios.yml` build
+trên macOS của GitHub Actions bằng XcodeGen, rồi đưa IPA chưa ký lên release `ios-latest`. Icon: `node ios/tools/make-icon.js`.
 
 ## Monitoring chuẩn (tuỳ chọn)
 

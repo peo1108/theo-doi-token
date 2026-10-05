@@ -1,0 +1,96 @@
+name: iOS smoke (Simulator)
+
+# Chạy tay: build cho Simulator, dựng server giả (remote.js + claude giả), mở các màn hình và chụp ảnh.
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate project
+        working-directory: ios
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build for Simulator
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild -project CCRemote.xcodeproj -scheme CCRemote -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee sim-build.log | grep -E "error:|\*\* BUILD" || true
+          grep -q "\*\* BUILD SUCCEEDED \*\*" sim-build.log
+
+      - name: Start fake server
+        run: |
+          node ios/tools/smoke-server.js "$RUNNER_TEMP/smoke" > "$RUNNER_TEMP/server.log" 2>&1 &
+          for i in $(seq 1 30); do test -f "$RUNNER_TEMP/smoke/smoke.json" && break; sleep 1; done
+          cat "$RUNNER_TEMP/server.log"
+          test -f "$RUNNER_TEMP/smoke/smoke.json"
+
+      - name: Boot simulator & install
+        run: |
+          set -euo pipefail
+          RUNTIME="$(xcrun simctl list runtimes | awk -F ' - ' '/^iOS/ {print $NF}' | tail -n 1)"
+          TYPE="$(xcrun simctl list devicetypes | awk -F '[()]' '/iPhone 1[6-9] Pro \(/ {print $2}' | tail -n 1)"
+          if [ -z "$TYPE" ]; then TYPE="$(xcrun simctl list devicetypes | awk -F '[()]' '/iPhone/ {print $2}' | tail -n 1)"; fi
+          UDID="$(xcrun simctl create smoke "$TYPE" "$RUNTIME")"
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl status_bar "$UDID" override --time "9:41" --batteryLevel 100 --cellularBars 4 || true
+          APP="$(find ios/build/sim/Build/Products -name 'CCRemote.app' -type d | head -n 1)"
+          xcrun simctl install "$UDID" "$APP"
+
+      - name: Screenshots
+        run: |
+          set -euo pipefail
+          S="$RUNNER_TEMP/smoke/smoke.json"
+          j() { node -e "console.log(require('$S').$1)"; }
+          mkdir -p shots
+          shot() { sleep "$2"; xcrun simctl io "$UDID" screenshot "shots/$1.png"; }
+
+          # chưa ghép -> màn hình ghép
+          xcrun simctl launch "$UDID" vn.peo.ccremote
+          shot 01-pair 4
+          xcrun simctl terminate "$UDID" vn.peo.ccremote
+
+          # nạp sẵn địa chỉ + token (SecureStore rơi về UserDefaults khi Keychain trống)
+          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote baseURL "http://127.0.0.1:7789"
+          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote secure.token "$(j token)"
+          xcrun simctl launch "$UDID" vn.peo.ccremote
+          shot 02-home 5
+
+          xcrun simctl openurl "$UDID" "ccremote://session/$(j chat)"
+          shot 03-chat 4
+          xcrun simctl openurl "$UDID" "ccremote://session/$(j perm)"
+          shot 04-permission 4
+          curl -s -X POST "http://127.0.0.1:7789/v1/sessions/$(j perm)/permission" \
+            -H "Authorization: Bearer $(j token)" -H 'Content-Type: application/json' \
+            -d "{\"requestId\":\"req-1\",\"decision\":\"allow\"}" || true
+          shot 05-permission-done 3
+          xcrun simctl openurl "$UDID" "ccremote://session/$(j ask)"
+          shot 06-question 4
+          xcrun simctl openurl "$UDID" "ccremote://session/$(j limit)"
+          shot 07-limit 4
+          xcrun simctl ui "$UDID" appearance dark
+          xcrun simctl openurl "$UDID" "ccremote://session/$(j chat)"
+          shot 08-chat-dark 4
+          xcrun simctl terminate "$UDID" vn.peo.ccremote
+          xcrun simctl launch "$UDID" vn.peo.ccremote
+          shot 09-home-dark 5
+          cat "$RUNNER_TEMP/server.log"
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-shots
+          path: |
+            shots/
+            ios/sim-build.log
+          if-no-files-found: warn
