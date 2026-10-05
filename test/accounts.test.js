@@ -427,14 +427,14 @@ test('addEntry: chèn giữ thứ tự tăng theo t; chosenId là mục cuối',
 
 // ---------- nhận diện tiến trình Claude Code ----------
 
-const VSCODE_EXE = 'c:\\Users\\cam\\.vscode\\extensions\\anthropic.claude-code-2.1.289-win32-x64\\resources\\native-binary\\claude.exe';
+const VSCODE_EXE = 'c:\\Users\\user\\.vscode\\extensions\\anthropic.claude-code-2.1.289-win32-x64\\resources\\native-binary\\claude.exe';
 const DESKTOP_EXE = 'C:\\Program Files\\WindowsApps\\Claude_2.19675.0.0_x64__pzs8sxrjxfjjc\\app\\Claude.exe';
 
 test('isClaudeCodeProcess: Claude Code có, ứng dụng Claude desktop và tiến trình khác không', () => {
   assert.equal(A.isClaudeCodeProcess({ name: 'claude.exe', path: VSCODE_EXE }), true);
   assert.equal(A.isClaudeCodeProcess({ name: 'claude.exe', path: VSCODE_EXE, cmd: `${VSCODE_EXE} --output-format stream-json --verbose` }), true);
   assert.equal(A.isClaudeCodeProcess({ name: 'node.exe', cmd: 'node C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js' }), true);
-  assert.equal(A.isClaudeCodeProcess({ name: 'claude.exe', path: 'C:\\Users\\cam\\.local\\bin\\claude.exe' }), true);
+  assert.equal(A.isClaudeCodeProcess({ name: 'claude.exe', path: 'C:\\Users\\user\\.local\\bin\\claude.exe' }), true);
   // không phân biệt hoa thường; ExecutablePath rỗng thì dựa vào CommandLine
   assert.equal(A.isClaudeCodeProcess({ name: 'CLAUDE.EXE', path: null, cmd: `"${VSCODE_EXE}" --resume` }), true);
   assert.equal(A.isClaudeCodeProcess({ name: 'claude', cmd: 'claude --continue' }), true);
@@ -742,7 +742,7 @@ test('switchTo: file đã là đích nhưng đang chọn tài khoản khác -> g
 test('isClaudeCodeProcess: ExecutablePath null + command line không đặt trong dấu nháy (đường dẫn có khoảng trắng) vẫn nhận ra ứng dụng desktop', () => {
   assert.equal(A.isClaudeCodeProcess({ name: 'Claude.exe', path: null, cmd: `${DESKTOP_EXE} --type=renderer --lang=en-US` }), false);
   assert.equal(A.isClaudeCodeProcess({ name: 'Claude.exe', path: null, cmd: DESKTOP_EXE }), false);
-  assert.equal(A.isClaudeCodeProcess({ name: 'claude.exe', path: null, cmd: 'C:\\Users\\cam\\My Tools\\claude.exe --resume' }), true);
+  assert.equal(A.isClaudeCodeProcess({ name: 'claude.exe', path: null, cmd: 'C:\\Users\\user\\My Tools\\claude.exe --resume' }), true);
 });
 
 // ---------- sync / keep ----------

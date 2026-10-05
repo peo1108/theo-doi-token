@@ -4,6 +4,20 @@ Dashboard local đọc log thật của Claude Code (`~/.claude/projects/**/*.js
 cửa sổ 5 giờ, ngữ cảnh từng phiên, vỡ cache, subagent, effort, lịch sử 90 ngày, ngân sách và cảnh báo Windows.
 Chỉ cần Node.js, không cài thêm gói nào.
 
+## Cài đặt
+
+1. **Cần có:** Windows 10/11, [Node.js](https://nodejs.org) bản LTS (18 trở lên), Claude Code đã đăng nhập (`/login`).
+2. Giải nén vào một thư mục cố định, ví dụ `Documents\theo-doi-token` (đừng chạy thẳng trong file zip hay thư mục tạm).
+3. Nháy đúp `start.bat`. Icon xuất hiện ở khay hệ thống và dashboard mở ở <http://127.0.0.1:7788>.
+   Lần đầu tool đọc lại log Claude Code còn trên máy (~30 ngày) nên có thể mất vài giây.
+4. Tuỳ chọn: tự chạy khi mở máy: `powershell -ExecutionPolicy Bypass -File autostart.ps1`.
+
+Gỡ: chạy `autostart.ps1 -Uninstall`, chuột phải icon khay → Thoát, rồi xoá thư mục. Nếu đã dùng tính năng nhiều tài khoản,
+xoá thêm `%USERPROFILE%\.claude\account-profiles\` (chứa token đăng nhập đã lưu).
+
+**Riêng tư:** mọi số liệu nằm trên máy bạn (`data/`). Dashboard chỉ nghe ở 127.0.0.1. Kết nối ra ngoài duy nhất là hỏi
+hạn mức 5h/tuần ở `api.anthropic.com` bằng chính token Claude Code của bạn (giống lệnh `/usage`).
+
 ## Chạy
 
 | Cách | Lệnh |
