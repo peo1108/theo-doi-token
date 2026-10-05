@@ -44,7 +44,7 @@
 | `analytics.js` | + `accountAt`, `effectiveUsage`, `loginState`, `suggestAccount`. |
 | `tracker.js` | Export hàm, chạy lệnh chỉ khi `require.main === module`; `sync` trong `scan`; cột `account`; `daily` theo tài khoản + model; API tài khoản + bảo mật; cảnh báo mới. |
 | `dashboard.html` | Thẻ Tài khoản, băng conflict, bộ lọc tài khoản, vạch mốc đổi, ô cài đặt `alertLimitPct`. |
-| `tray.ps1` | Menu con Tài khoản, tooltip có tên, icon warn khi conflict/expired. |
+| `tray.ps1`, `tray-ui.ps1` (mới) | Menu khay kiểu bảng nổi (theme tối/sáng, bo góc, icon), đổi tài khoản, tooltip có tên, icon warn khi conflict/expired. |
 | `test/helpers.js` (mới) | Tạo thư mục Claude giả + dữ liệu mẫu. |
 | `test/accounts.test.js`, `test/analytics.test.js`, `test/tracker.test.js`, `test/cli.test.js` (mới) | Test. |
 | `README.md` | Mục "Nhiều tài khoản". |
@@ -254,25 +254,61 @@
 
 ---
 
-### Task 8: Khay
+### Task 8: Khay — menu nhỏ kiểu Razer + đổi tài khoản
+
+Người dùng muốn menu khay "nhỏ nhỏ" giống menu Razer (ảnh mẫu): bảng nổi nền tối, bo góc, mỗi dòng cao có icon tròn bên
+trái và chữ, các nhóm ngăn bằng đường kẻ mảnh, nhóm thoát ở cuối.
 
 **Files:**
-- Modify: `tray.ps1` (menu dòng 68–78, `Update-Status` dòng 82–110)
+- Create: `tray-ui.ps1` — renderer + vẽ icon (dot-source từ `tray.ps1`), để `tray.ps1` không phình ra.
+- Modify: `tray.ps1` (dựng menu dòng 68–78, `Update-Status` dòng 82–110, sự kiện chuột dòng 112–121)
 
 **Interfaces:**
 - Consumes: `GET /api/accounts`, `POST /api/accounts/switch` (header `X-Token-Tracker: 1`, body `{"id": …}`, `-ContentType 'application/json; charset=utf-8'`), `/api/summary` (`account`, `conflict`, `needLogin`).
+- Produces (`tray-ui.ps1`):
+  - `Get-TrayTheme -> @{ Dark = [bool]; Back; Hover; Text; SubText; Sep }` — đọc `HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme` (0 → tối; lỗi → tối). Tối: nền `#2b2b2b`, hover `#3d3d3d`, chữ `#ffffff`, chữ phụ `#a0a0a0`, kẻ `#444444`. Sáng: `#f9f9f9`, `#e8e8e8`, `#1a1a1a`, `#6b6b6b`, `#dddddd`.
+  - `New-TrayRenderer($theme) -> ToolStripRenderer` — C# `Add-Type` lớp `TrayRenderer : ToolStripProfessionalRenderer` vẽ nền, hover bo góc 6px, đường kẻ, chữ phụ màu nhạt (dòng có `Tag = 'sub'`), không viền dọc lề ảnh.
+  - `Set-RoundCorners([IntPtr]$hwnd)` — `DwmSetWindowAttribute(hwnd, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/, 2 /*ROUND*/)`; lỗi (Windows 10) → bỏ qua.
+  - `New-GlyphIcon([string]$glyph, [string]$hex, [int]$size = 20) -> Bitmap` — vẽ ký tự font `Segoe Fluent Icons` (thiếu → `Segoe MDL2 Assets`) màu `$hex`.
+  - `New-AvatarIcon([string]$letter, [string]$hex, [int]$size = 22) -> Bitmap` — hình tròn màu + chữ cái trắng đậm; màu chọn từ bảng 6 màu theo hash của `id`.
+  - `New-StatusDot([string]$hex) -> Bitmap` — chấm 8px dùng làm dấu "đang dùng"/"cần /login".
 
-- [ ] **Step 1:** Thêm `ToolStripMenuItem` "Tài khoản" sau dòng tóm tắt; trong `Update-Status`, dựng lại `DropDownItems`: mỗi hồ sơ một dòng `Tên · 5h 42% · tuần 76%` (thêm `· cần /login` khi `loginState = 'expired'`), `Checked = $true` ở tài khoản đang dùng; click → POST switch → `$tray.ShowBalloonTip(5000, 'Đã đổi tài khoản', <tên + cảnh báo N phiên đang chạy nếu có>, 'Info')`, lỗi → balloon `'Error'` với `message`; sau đó `Update-Status`. Không có hồ sơ → một dòng mờ "Chưa có tài khoản".
-- [ ] **Step 2:** Dòng tóm tắt và tooltip thêm tên tài khoản đầu dòng (`$s.account.name`), vẫn cắt tooltip ở 63 ký tự; `conflict` hoặc `needLogin` khác rỗng → nâng `$state` lên `warn` nếu đang là `idle`/`good`.
-- [ ] **Step 3: Kiểm tra tay:** tắt khay cũ (chuột phải → Thoát), chạy `powershell -ExecutionPolicy Bypass -File tray.ps1`; menu "Tài khoản ▸" có dấu ✓ đúng tài khoản; tooltip có tên.
-- [ ] **Step 4: Commit** `git commit -am "feat(tray): menu đổi tài khoản"`
+**Bố cục menu** (rộng tối thiểu 300px, dòng 40px, font `Segoe UI` 10pt, lề trái 14px):
+
+```text
+┌───────────────────────────────────────────┐
+│ (●) Claude · cam                          │  avatar tài khoản đang dùng, chữ đậm
+│     5h 42% · tuần 76% · reset 17:20       │  chữ phụ (Tag='sub'), không bấm được
+├───────────────────────────────────────────┤
+│ (C) cam            42% · 76%          ●   │  ● xanh = đang dùng
+│ (W) work           10% · 30%   Gợi ý      │  bấm → đổi tài khoản
+│ (B) backup         cần /login         ●   │  ● đỏ, mờ chữ
+│ (+) Thêm tài khoản                        │  balloon: "Gõ /login trong Claude Code bằng tài khoản mới"
+├───────────────────────────────────────────┤
+│ [▦] Mở dashboard                          │  chữ đậm
+│ [⚙] Cài đặt                               │  mở dashboard#settings
+│ [⟳] Làm mới                               │
+│ [▢] Mở thư mục dữ liệu                    │
+├───────────────────────────────────────────┤
+│     Thoát                                 │
+└───────────────────────────────────────────┘
+```
+
+Khi có `conflict`: chèn dưới phần đầu một dòng vàng "⚠ Đăng nhập đang là {F}" với hai dòng con "Áp lại {I}" / "Giữ {F}" (gọi `switch` / `keep`).
+Chuột trái **một lần** hoặc chuột phải → hiện menu ngay cạnh khay (một lần bấm trái gọi `ShowContextMenu` qua reflection như Windows vẫn làm cho NotifyIcon); nháy đúp vẫn mở dashboard.
+
+- [ ] **Step 1: Viết `tray-ui.ps1`** với các hàm trên. Glyph: dashboard `E9D2`, cài đặt `E713`, làm mới `E72C`, thư mục `E838`, thêm `E710`, cảnh báo `E7BA`.
+- [ ] **Step 2: Sửa `tray.ps1`:** dot-source `tray-ui.ps1`; áp renderer + `Set-RoundCorners` ở sự kiện `Opening` của menu (handle đã có); `Update-Status` gọi thêm `/api/accounts` và dựng lại phần tài khoản theo bố cục; click tài khoản → POST switch → `ShowBalloonTip(5000, 'Đã đổi sang {tên}', <cảnh báo N phiên đang chạy nếu có>, 'Info')`, lỗi → balloon `'Error'` với `message`, rồi `Update-Status`. Tooltip thêm tên tài khoản đầu dòng, vẫn cắt ở 63 ký tự; `conflict` hoặc `needLogin` khác rỗng → nâng `$state` lên `warn` nếu đang `idle`/`good`.
+- [ ] **Step 3: Kiểm tra cú pháp:** `powershell -NoProfile -Command "$null = [ScriptBlock]::Create((Get-Content -Raw tray.ps1)); $null = [ScriptBlock]::Create((Get-Content -Raw tray-ui.ps1)); 'ok'"` → `ok`.
+- [ ] **Step 4: Kiểm tra tay** (người dùng xác nhận bằng ảnh chụp): tắt khay cũ (chuột phải → Thoát), chạy `start.bat`; bấm trái một lần → menu nền tối bo góc như bố cục; tài khoản đang dùng có chấm xanh; rê chuột có nền hover bo góc; Windows chế độ sáng → menu sáng.
+- [ ] **Step 5: Commit** `git add tray.ps1 tray-ui.ps1 && git commit -m "feat(tray): menu kiểu bảng nổi + đổi tài khoản"`
 
 ---
 
 ### Task 9: README và kiểm tra cuối với tài khoản thật
 
 **Files:**
-- Modify: `README.md` (thêm mục "## Nhiều tài khoản" sau "## Cảnh báo"; thêm `accounts.js`, `cc-switch.cmd`, `data/account-log.json`, `~/.claude/account-profiles/` vào bảng File)
+- Modify: `README.md` (thêm mục "## Nhiều tài khoản" sau "## Cảnh báo"; thêm `accounts.js`, `cc-switch.cmd`, `tray-ui.ps1`, `data/account-log.json`, `~/.claude/account-profiles/` vào bảng File)
 
 - [ ] **Step 1: Viết mục README:** cách thêm tài khoản (`/login` → tự xuất hiện, đổi tên trên dashboard hoặc `cc-switch rename`); cách đổi (khay / dashboard / `cc-switch <tên>`; thêm thư mục dự án vào PATH để dùng `cc-switch`); cảnh báo đổi khi còn phiên chạy và cách xử lý băng "Áp lại / Giữ"; % hạn mức lấy từ cache của Claude Code nên tài khoản không dùng chỉ cập nhật tới lần dùng cuối; hồ sơ chứa token, nằm cạnh `.credentials.json`, đừng chia sẻ thư mục `account-profiles`; khôi phục bằng tay từ `account-profiles/backup/`.
 - [ ] **Step 2: Chạy toàn bộ test** `node --test test/` → PASS.
