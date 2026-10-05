@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 60s
+
+scrape_configs:
+  # số liệu tổng hợp từ tracker.js (đọc log Claude Code)
+  - job_name: claude-token-tracker
+    static_configs:
+      - targets: ["host.docker.internal:7788"]
+
+  # telemetry gốc của Claude Code khi bật OTEL_METRICS_EXPORTER=prometheus
+  # (cổng mặc định của OpenTelemetry Prometheus exporter là 9464 — đổi nếu bạn cấu hình khác)
+  - job_name: claude-code-otel
+    static_configs:
+      - targets: ["host.docker.internal:9464"]

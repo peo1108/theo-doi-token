@@ -1,0 +1,1727 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Claude Code</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+  // áp theme trước khi vẽ để không bị nháy
+  try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+</script>
+<style>
+  :root {
+    color-scheme: light;
+    --page:   #fcfcfb;
+    --card:   #f0f0ef;
+    --tile:   #e5e5e4;
+    --tile-2: #dcdcda;
+    --raised: #ffffff;
+    --text:   #0b0b0b;
+    --muted:  #77756f;
+    --line:   rgba(11, 11, 11, .08);
+    --sep:    rgba(11, 11, 11, .11);
+    --grid:   rgba(11, 11, 11, .07);
+    --ink-soft: rgba(11, 11, 11, .45);
+    --border: rgba(11, 11, 11, .10);
+    --shadow: 0 10px 28px rgba(11, 11, 11, .14);
+    --accent: #2566d0;
+    --accent-soft: rgba(109, 167, 236, .18);
+    --focus:  #9dbdf0;
+    --good:   #2f7d4f;
+    --warn:   #a86a00;
+    --bad:    #b8492c;
+    --good-bg: rgba(47, 125, 79, .12);
+    --warn-bg: rgba(237, 161, 0, .16);
+    --bad-bg:  rgba(184, 73, 44, .12);
+    /* loại token: đọc cache nhạt nhất (đáy), đầu ra đậm nhất (đỉnh) */
+    --t-cr: #c9daf5;
+    --t-i:  #9dbdf0;
+    --t-w5: #6f9ce8;
+    --t-w1: #4a7fdd;
+    --t-o:  #2566d0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page:   #141413;
+      --card:   #1e1e1d;
+      --tile:   #2a2a28;
+      --tile-2: #353532;
+      --raised: #2f2f2c;
+      --text:   #f4f3ee;
+      --muted:  #a3a29b;
+      --line:   rgba(255, 255, 255, .08);
+      --sep:    rgba(255, 255, 255, .12);
+      --grid:   rgba(255, 255, 255, .07);
+      --ink-soft: rgba(255, 255, 255, .5);
+      --border: rgba(255, 255, 255, .12);
+      --shadow: 0 10px 28px rgba(0, 0, 0, .5);
+      --accent: #6da7ec;
+      --accent-soft: rgba(109, 167, 236, .16);
+      --focus:  #3987e5;
+      --good:   #5bb57f;
+      --warn:   #e0a73a;
+      --bad:    #e3826a;
+      --good-bg: rgba(91, 181, 127, .14);
+      --warn-bg: rgba(224, 167, 58, .14);
+      --bad-bg:  rgba(227, 130, 106, .14);
+      --t-cr: #22406b;
+      --t-i:  #2f5f9e;
+      --t-w5: #3d7ccc;
+      --t-w1: #5598e7;
+      --t-o:  #9ec5f4;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:   #141413;
+    --card:   #1e1e1d;
+    --tile:   #2a2a28;
+    --tile-2: #353532;
+    --raised: #2f2f2c;
+    --text:   #f4f3ee;
+    --muted:  #a3a29b;
+    --line:   rgba(255, 255, 255, .08);
+    --sep:    rgba(255, 255, 255, .12);
+    --grid:   rgba(255, 255, 255, .07);
+    --ink-soft: rgba(255, 255, 255, .5);
+    --border: rgba(255, 255, 255, .12);
+    --shadow: 0 10px 28px rgba(0, 0, 0, .5);
+    --accent: #6da7ec;
+    --accent-soft: rgba(109, 167, 236, .16);
+    --focus:  #3987e5;
+    --good:   #5bb57f;
+    --warn:   #e0a73a;
+    --bad:    #e3826a;
+    --good-bg: rgba(91, 181, 127, .14);
+    --warn-bg: rgba(224, 167, 58, .14);
+    --bad-bg:  rgba(227, 130, 106, .14);
+    --t-cr: #22406b;
+    --t-i:  #2f5f9e;
+    --t-w5: #3d7ccc;
+    --t-w1: #5598e7;
+    --t-o:  #9ec5f4;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text);
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 30px 20px 56px; }
+
+  /* ---------------- header ---------------- */
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { margin: 0; font-size: 23px; font-weight: 600; letter-spacing: -.025em; }
+  .head-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  .live { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); background: var(--card); border-radius: 999px; padding: 7px 13px; }
+  .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--good); animation: pulse 2s infinite; }
+  .live.is-error i { background: var(--bad); animation: none; }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(47,125,79,.45); }
+    70%  { box-shadow: 0 0 0 7px rgba(47,125,79,0); }
+    100% { box-shadow: 0 0 0 0 rgba(47,125,79,0); }
+  }
+
+  .ghost {
+    font: inherit; font-size: 13px; color: var(--muted); background: var(--card);
+    border: 0; border-radius: 9px; padding: 7px 13px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 7px;
+    transition: color .12s ease, background-color .12s ease;
+  }
+  .ghost:hover { color: var(--text); background: var(--tile); }
+  .ghost svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.7; }
+  .ghost.primary { background: var(--accent); color: #fff; }
+  .ghost.primary:hover { filter: brightness(1.08); background: var(--accent); color: #fff; }
+
+  .seg { display: flex; gap: 4px; background: var(--card); border-radius: 9px; padding: 3px; }
+  .seg button { font: inherit; font-size: 13.5px; padding: 5px 13px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; transition: background-color .12s ease, color .12s ease; }
+  .seg button:hover { color: var(--text); }
+  .seg button.is-active { background: var(--raised); color: var(--text); font-weight: 500; box-shadow: 0 1px 2px rgba(11,11,11,.06); }
+
+  .banner { background: var(--bad-bg); color: var(--text); border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; font-size: 13.5px; line-height: 1.6; }
+  .banner code { background: var(--tile); border-radius: 5px; padding: 1px 6px; }
+
+  /* ---------------- KPI ---------------- */
+  .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
+  .kpi { background: var(--card); border-radius: 12px; padding: 14px 15px 36px; position: relative; overflow: hidden; }
+  .kpi .k-label { font-size: 13.5px; color: var(--muted); }
+  .kpi .k-value { margin-top: 6px; font-size: 27px; font-weight: 600; letter-spacing: -.025em; line-height: 1.1; }
+  .kpi .k-foot { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+  .spark { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 30px; pointer-events: none; }
+  .delta { font-weight: 600; color: var(--text); }
+
+  /* ---------------- layout ---------------- */
+  .grid { display: grid; grid-template-columns: minmax(0, 2.05fr) minmax(0, 1fr); gap: 10px; align-items: start; }
+  .grid3 { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: start; }
+  .col { display: grid; gap: 10px; }
+  .card { background: var(--card); border-radius: 12px; padding: 15px 16px 16px; }
+  .card h2 { margin: 0; font-size: 14.5px; font-weight: 600; }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .card-sub { font-size: 12.5px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+  .card-head .card-sub { margin-top: 0; }
+  .card-sub b { color: var(--text); font-weight: 600; }
+  .mt10 { margin-top: 10px; }
+  .section-title { margin: 26px 0 10px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+
+  /* ---------------- chart ---------------- */
+  .chart-wrap { position: relative; }
+  svg { display: block; width: 100%; height: auto; }
+  svg .ax { fill: var(--muted); font-size: 10.5px; font-family: inherit; }
+  svg .gl { stroke: var(--grid); }
+  svg .ref { stroke: var(--ink-soft); }
+  #bars g.bar { transition: opacity .12s ease; }
+  #bars.dim g.bar { opacity: .3; }
+  #bars.dim g.bar.on { opacity: 1; }
+  #bars.dim #prevLine { opacity: .15; }
+  #guide { opacity: 0; transition: opacity .12s ease; pointer-events: none; }
+  #prevLine { transition: opacity .12s ease; }
+
+  .tip, .ftip {
+    background: var(--raised); color: var(--text); border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    border-radius: 10px; padding: 9px 12px;
+    font-size: 12.5px; line-height: 1.55;
+    pointer-events: none; opacity: 0; white-space: nowrap; z-index: 50;
+  }
+  .tip { position: absolute; top: 0; left: 0; transform: translate(-50%, -100%); transition: opacity .1s ease, left .08s ease; }
+  .ftip { position: fixed; transform: translate(-50%, calc(-100% - 12px)); transition: opacity .08s ease; }
+  .tip.show, .ftip.show { opacity: 1; }
+  .t-head { font-weight: 600; margin-bottom: 5px; }
+  .t-row { display: flex; align-items: center; gap: 7px; }
+  .t-row .v { margin-left: auto; padding-left: 16px; font-weight: 500; }
+  .t-row .v.money { color: var(--muted); font-weight: 400; padding-left: 8px; }
+  .t-total { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); font-weight: 600; display: flex; gap: 16px; }
+  .t-prev { margin-top: 4px; font-size: 12px; color: var(--muted); }
+
+  .legend { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .mean { padding-left: 11px; border-left: 1px solid var(--line); }
+  .legend .dash { width: 16px; height: 0; border-top: 2px dashed var(--ink-soft); }
+  .legend .mean b { color: var(--text); font-weight: 600; }
+  .sw { width: 9px; height: 9px; border-radius: 2px; flex: none; display: inline-block; }
+
+  .cum { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .cum-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+  .cum-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .cum-head span { font-size: 12.5px; color: var(--muted); }
+
+  /* ---------------- danh sách có thanh ---------------- */
+  .mrow { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; font-size: 13px; align-items: baseline; }
+  .mrow + .mrow { margin-top: 14px; }
+  .mrow .m-name { font-weight: 500; display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .mrow .m-val { font-weight: 600; }
+  .mrow .m-sub { font-size: 12px; color: var(--muted); }
+  .bar-track { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--tile); overflow: hidden; margin-top: 5px; }
+  .bar-fill { display: block; height: 100%; border-radius: 3px; width: 0; transition: width .5s cubic-bezier(.2,.7,.3,1); }
+  .mrow.is-unused { opacity: .6; }
+  .mrow.is-unused .m-val { color: var(--muted); font-weight: 500; }
+  .mrow.divide { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--line); }
+  .tag { font-size: 10.5px; font-weight: 500; color: var(--muted); background: var(--tile); border-radius: 5px; padding: 2px 6px; white-space: nowrap; }
+
+  .stack { display: flex; gap: 2px; height: 12px; border-radius: 6px; overflow: hidden; background: var(--tile); }
+  .stack i { display: block; height: 100%; }
+  .mix-list { margin-top: 13px; display: grid; gap: 9px; font-size: 13px; }
+  .mix-list .r { display: flex; align-items: center; gap: 8px; }
+  .mix-list .r .v { margin-left: auto; font-weight: 500; }
+  .mix-list .r .p { color: var(--muted); width: 48px; text-align: right; font-size: 12.5px; }
+
+  /* ---------------- mini stats ---------------- */
+  .minis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .mini { background: var(--tile); border-radius: 10px; padding: 10px 12px 11px; min-width: 0; }
+  .mini .l { font-size: 12.5px; color: var(--muted); }
+  .mini .v { margin-top: 5px; font-size: 16px; font-weight: 600; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mini .s { margin-top: 3px; font-size: 12px; color: var(--muted); }
+
+  /* ---------------- cửa sổ 5h & ngân sách ---------------- */
+  .hero { display: grid; grid-template-columns: 1.25fr 1fr 1fr 1fr; gap: 18px; align-items: end; }
+  @media (max-width: 760px) { .hero { grid-template-columns: 1fr 1fr; } }
+  .hero .big { font-size: 34px; font-weight: 600; letter-spacing: -.03em; line-height: 1; }
+  .hero .big-sub { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+  .countdown { font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
+  .tline { position: relative; height: 10px; border-radius: 5px; background: var(--tile); margin: 16px 0 6px; overflow: hidden; }
+  .tline i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 5px; }
+  .tline-l { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; border-radius: 6px; padding: 3px 8px; }
+  .status svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; }
+  .status.good { color: var(--good); background: var(--good-bg); }
+  .status.warn { color: var(--warn); background: var(--warn-bg); }
+  .status.bad  { color: var(--bad);  background: var(--bad-bg); }
+  .status.info { color: var(--muted); background: var(--tile); }
+
+  .budget + .budget { margin-top: 14px; }
+  .budget .b-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; }
+  .budget .b-top b { font-size: 15px; }
+  .budget .b-track { height: 8px; border-radius: 4px; background: var(--tile); overflow: hidden; margin-top: 7px; }
+  .budget .b-track i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .5s ease; }
+  .budget .b-track i.warn { background: var(--warn); }
+  .budget .b-track i.bad { background: var(--bad); }
+  .budget .b-foot { font-size: 12px; color: var(--muted); margin-top: 5px; }
+
+  details.settings { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+  details.settings summary { cursor: pointer; font-size: 13px; font-weight: 500; color: var(--muted); list-style: none; display: flex; align-items: center; gap: 6px; }
+  details.settings summary::-webkit-details-marker { display: none; }
+  details.settings summary::before { content: '›'; display: inline-block; transition: transform .15s ease; font-size: 15px; }
+  details.settings[open] summary::before { transform: rotate(90deg); }
+  .form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+  .fld span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  .fld input[type=number], select {
+    width: 100%; font: inherit; font-size: 13.5px; font-weight: 500; color: var(--text);
+    background: var(--raised); border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 10px; outline: none;
+  }
+  .fld input:focus, select:focus { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .chk { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .form-actions { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .form-actions .msg { font-size: 12px; color: var(--muted); }
+
+  .alerts { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 9px; }
+  .alerts h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .alert { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 8px; font-size: 12.5px; align-items: start; }
+  .alert .a-ic { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; }
+  .alert .a-ic.critical { background: var(--bad); }
+  .alert .a-ic.warning { background: var(--warn); }
+  .alert .a-ic.info { background: var(--accent); }
+  .alert .a-t { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+  .alert .a-b { grid-column: 2 / -1; color: var(--muted); }
+
+  /* ---------------- heatmap ---------------- */
+  .hm { display: grid; grid-template-columns: 58px repeat(24, minmax(0, 1fr)); gap: 2px; align-items: center; }
+  .hm .hl { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .hm .hc { aspect-ratio: 1 / 1; border-radius: 3px; background: var(--tile); cursor: default; }
+  .hm .hc:hover { outline: 2px solid var(--text); outline-offset: -1px; }
+  .hm .hx { font-size: 10px; color: var(--muted); text-align: left; }
+  .hm-scale { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); margin-top: 10px; }
+  .hm-scale i { width: 16px; height: 9px; border-radius: 2px; display: inline-block; }
+
+  /* ---------------- tables ---------------- */
+  .table-wrap { overflow-x: auto; margin: 0 -4px; padding: 0 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: right; padding: 12px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { padding-left: 0; text-align: left; }
+  th:last-child, td:last-child { padding-right: 0; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tfoot td { border-top: 1px solid var(--sep); border-bottom: 0; font-weight: 600; padding-top: 13px; }
+  thead th { font-size: 11.5px; font-weight: 500; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding-top: 0; padding-bottom: 10px; }
+  .tbl-sm td { padding: 9px 8px; font-size: 13px; }
+  .tbl-left2 th:nth-child(2), .tbl-left2 td:nth-child(2), .tbl-left2 th:nth-child(3), .tbl-left2 td:nth-child(3) { text-align: left; }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: var(--tile); }
+  tr.click.is-sel td { background: var(--accent-soft); }
+
+  .pricing table { min-width: 900px; }
+  .pricing thead tr:first-child th { font-size: 12.5px; font-weight: 600; color: var(--text); text-transform: none; letter-spacing: 0; text-align: left; padding-top: 0; padding-bottom: 9px; }
+  .pricing thead th[colspan] { border-bottom: 1px solid var(--sep); }
+  .pricing tbody tr.unused td { color: var(--muted); }
+  .pricing tbody tr.unused .m-title { color: var(--muted); }
+  .pricing tfoot .note { font-weight: 400; color: var(--muted); font-size: 12.5px; text-align: left; }
+  .sep-l { border-left: 1px solid var(--sep); }
+
+  .m-cell { display: flex; align-items: flex-start; gap: 11px; text-align: left; padding-right: 20px; }
+  .m-icon { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; flex: none; margin-top: 1px; box-shadow: inset 0 0 0 1px var(--border); color: #fff; }
+  .m-icon svg { width: 15px; height: 15px; fill: currentColor; }
+  .m-title { font-weight: 600; }
+  .m-desc { font-size: 12px; color: var(--muted); white-space: normal; line-height: 1.4; margin-top: 2px; max-width: 260px; }
+  .m-share { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+  .sess table { min-width: 620px; }
+  .s-name { text-align: left; font-weight: 500; }
+  .s-name span { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
+  .badge-m { display: inline-block; font-size: 11.5px; font-weight: 600; border-radius: 5px; padding: 2px 7px; background: var(--tile); }
+  .c-bar { width: 130px; }
+  .sbar { height: 6px; border-radius: 3px; background: var(--tile); overflow: hidden; }
+  .sbar i { display: block; height: 100%; border-radius: 3px; }
+
+  .advice { margin-top: 12px; background: var(--tile); border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.55; }
+  .advice b { font-weight: 600; }
+  .fine { margin: 14px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.65; }
+  .disclaimer { margin: 20px 0 0; font-size: 12px; color: var(--muted); text-align: center; line-height: 1.6; }
+  .empty { padding: 22px 0; text-align: center; color: var(--muted); font-size: 13px; }
+
+  @media (max-width: 980px) {
+    .grid, .grid3 { grid-template-columns: minmax(0, 1fr); }
+    .kpis, .minis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 620px) {
+    .wrap { padding: 20px 16px 40px; }
+    .kpis, .minis, .form { grid-template-columns: minmax(0, 1fr); }
+    .kpi .k-value { font-size: 24px; }
+    .hm { grid-template-columns: 44px repeat(24, minmax(0, 1fr)); gap: 1px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="head">
+    <h1 id="pageTitle">Token Claude Code</h1>
+    <div class="head-right">
+      <span class="live" id="live"><i></i><span id="updated">Đang tải…</span></span>
+      <button class="ghost" id="themeBtn" title="Đổi giao diện sáng / tối">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" stroke-linejoin="round"/></svg>
+        <span id="themeLabel">Tự động</span>
+      </button>
+      <button class="ghost" id="refreshBtn" title="Quét lại log ngay">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Làm mới
+      </button>
+      <button class="ghost" id="exportBtn">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Xuất CSV
+      </button>
+      <div class="seg" id="rangeSeg">
+        <button class="is-active" data-range="24h">24 giờ</button>
+        <button data-range="7d">7 ngày</button>
+      </div>
+      <div class="seg" id="metricSeg">
+        <button class="is-active" data-metric="token">Token</button>
+        <button data-metric="cost">Chi phí</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <!-- ============ cửa sổ 5 giờ + ngân sách ============ -->
+  <section class="grid">
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Cửa sổ 5 giờ</h2>
+          <div class="card-sub">Ước lượng từ log: cửa sổ mở ở giờ tròn của tin nhắn đầu tiên, kéo dài 5 giờ</div>
+        </div>
+        <span id="winStatus"></span>
+      </div>
+      <div id="winNow"></div>
+      <div class="chart-wrap mt10">
+        <svg id="winChart" viewBox="0 0 720 150" role="img" aria-label="Chi phí các cửa sổ 5 giờ gần đây"></svg>
+      </div>
+    </div>
+
+    <aside class="card">
+      <h2>Ngân sách</h2>
+      <div class="card-sub">Quy đổi theo giá API · tuần tính từ thứ Hai</div>
+      <div class="mt10" id="budgets"></div>
+
+      <details class="settings" id="settings">
+        <summary>Cài đặt ngân sách &amp; cảnh báo</summary>
+        <form class="form" id="cfgForm">
+          <label class="fld"><span>Ngân sách ngày (USD)</span><input type="number" min="0" step="1" name="budgetDay"></label>
+          <label class="fld"><span>Ngân sách tuần (USD)</span><input type="number" min="0" step="1" name="budgetWeek"></label>
+          <label class="fld"><span>Báo khi cache hit dưới (%)</span><input type="number" min="0" max="100" step="1" name="alertCacheHit"></label>
+          <label class="fld"><span>Báo khi ngữ cảnh vượt (token)</span><input type="number" min="0" step="10000" name="alertContext"></label>
+          <label class="fld"><span>Báo khi cửa sổ 5h gấp (lần TB)</span><input type="number" min="1" step="0.1" name="alertWindowRatio"></label>
+          <label class="chk"><input type="checkbox" name="notify"> Gửi thông báo Windows</label>
+          <div class="form-actions">
+            <button class="ghost primary" type="submit">Lưu</button>
+            <button class="ghost" type="button" id="testNotify">Thử thông báo</button>
+            <span class="msg" id="cfgMsg">Đặt 0 để tắt</span>
+          </div>
+        </form>
+      </details>
+
+      <div class="alerts" id="alerts"></div>
+    </aside>
+  </section>
+
+  <div class="section-title">Tổng quan</div>
+  <section class="kpis" id="kpis"></section>
+
+  <section class="grid">
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2 id="mainTitle">Token theo giờ</h2>
+          <div class="card-sub" id="mainSub"></div>
+        </div>
+        <div class="legend" id="legend"></div>
+      </div>
+      <div class="chart-wrap" id="chartWrap">
+        <svg id="bars" viewBox="0 0 720 252" role="img" aria-label="Biểu đồ token theo thời gian"></svg>
+        <div class="tip" id="tip"></div>
+      </div>
+      <div class="cum">
+        <div class="cum-head">
+          <h3>Chi phí luỹ kế trong <span id="cumPeriod">24h</span></h3>
+          <span id="cumTotal"></span>
+        </div>
+        <svg id="cum" viewBox="0 0 720 96" role="img" aria-label="Biểu đồ chi phí luỹ kế"></svg>
+      </div>
+    </div>
+
+    <aside class="col">
+      <div class="card">
+        <h2>Chi phí theo model</h2>
+        <div class="card-sub" id="modelInsight"></div>
+        <div style="margin-top:15px" id="byModel"></div>
+      </div>
+      <div class="card">
+        <h2>Cơ cấu token</h2>
+        <div style="margin-top:15px">
+          <div class="stack" id="mixBar"></div>
+          <div class="mix-list" id="mixList"></div>
+        </div>
+      </div>
+    </aside>
+  </section>
+
+  <section class="card mt10">
+    <div class="card-head">
+      <div>
+        <h2>Chỉ số vận hành</h2>
+        <div class="card-sub" id="opsSub"></div>
+      </div>
+    </div>
+    <div class="minis" id="minis"></div>
+  </section>
+
+  <!-- ============ phân tích ============ -->
+  <div class="section-title">Phân tích</div>
+  <section class="grid3">
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Giờ dùng nhiều · 7 ngày</h2>
+          <div class="card-sub" id="hmSub"></div>
+        </div>
+      </div>
+      <div class="hm" id="heatmap"></div>
+      <div class="hm-scale" id="hmScale"></div>
+    </div>
+    <div class="card">
+      <h2>Phiên chính &amp; subagent</h2>
+      <div class="card-sub" id="agentSub"></div>
+      <div style="margin-top:15px" id="byAgent"></div>
+    </div>
+    <div class="card">
+      <h2>Theo mức effort</h2>
+      <div class="card-sub" id="effortSub"></div>
+      <div class="table-wrap mt10">
+        <table class="tbl-sm">
+          <thead><tr><th>Effort</th><th>Lượt</th><th>Output/lượt</th><th>$/lượt</th></tr></thead>
+          <tbody id="effortBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card mt10 sess">
+    <div class="card-head">
+      <div>
+        <h2>Phiên tốn kém nhất</h2>
+        <div class="card-sub">Top 5 trên <b id="sessCount"></b> phiên trong <span id="sessPeriod">24h</span> · bấm vào một phiên để xem chi tiết</div>
+      </div>
+      <div class="card-sub">Top 5 chiếm <b id="sessShare"></b> chi phí</div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Phiên</th><th>Model</th><th>Token</th><th>Chi phí</th><th class="c-bar"></th><th>% chi phí</th></tr>
+        </thead>
+        <tbody id="sessBody"></tbody>
+        <tfoot id="sessFoot"></tfoot>
+      </table>
+    </div>
+  </section>
+
+  <section class="card mt10" id="sessionCard">
+    <div class="card-head">
+      <div>
+        <h2>Ngữ cảnh theo từng lượt</h2>
+        <div class="card-sub">Độ dài ngữ cảnh = đầu vào + ghi cache + đọc cache của mỗi lượt (chuỗi chính). Chấm đỏ = vỡ cache, chấm xám = compact.</div>
+      </div>
+      <select id="sessSelect" style="max-width:340px"></select>
+    </div>
+    <div class="chart-wrap">
+      <svg id="ctxChart" viewBox="0 0 1100 230" role="img" aria-label="Độ dài ngữ cảnh theo lượt"></svg>
+    </div>
+    <div class="minis mt10" id="sessMinis"></div>
+    <div class="advice" id="sessAdvice" hidden></div>
+  </section>
+
+  <section class="card mt10">
+    <div class="card-head">
+      <div>
+        <h2>Vỡ cache</h2>
+        <div class="card-sub" id="brSub"></div>
+      </div>
+    </div>
+    <div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,2fr)">
+      <div id="brCauses"></div>
+      <div class="table-wrap">
+        <table class="tbl-sm tbl-left2">
+          <thead><tr><th>Thời điểm</th><th>Phiên</th><th>Nguyên nhân</th><th>Nghỉ</th><th>Ghi lại</th><th>Tốn thêm</th></tr></thead>
+          <tbody id="brBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="advice" id="brAdvice" hidden></div>
+  </section>
+
+  <section class="card mt10">
+    <div class="card-head">
+      <div>
+        <h2>Lịch sử 90 ngày</h2>
+        <div class="card-sub">Tổng hợp theo ngày, tự lưu trong data/usage.json (log gốc của Claude Code chỉ giữ ~30 ngày)</div>
+      </div>
+      <div class="legend" id="histLegend"></div>
+    </div>
+    <div class="chart-wrap">
+      <svg id="histChart" viewBox="0 0 1100 200" role="img" aria-label="Lịch sử theo ngày"></svg>
+    </div>
+    <div class="minis mt10" id="histMinis"></div>
+  </section>
+
+  <section class="card pricing mt10">
+    <div class="card-head">
+      <div>
+        <h2>Bảng giá &amp; chi phí</h2>
+        <div class="card-sub">Giá niêm yết USD / 1M token (sửa trong models.json) · fast mode tính gấp đôi</div>
+      </div>
+      <div class="card-sub">Tổng: <b id="priceTotalTok"></b> token</div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th rowspan="2" style="vertical-align:bottom;padding-bottom:10px">Model</th>
+            <th colspan="5" class="sep-l">Giá niêm yết · USD / 1M token</th>
+            <th colspan="3" class="sep-l">Mức dùng trong <span id="pricePeriod">24h</span></th>
+          </tr>
+          <tr>
+            <th class="sep-l">Đầu vào</th><th>Đầu ra</th><th>Ghi cache 5 phút</th><th>Ghi cache 1h</th><th>Đọc cache</th>
+            <th class="sep-l">Token dùng</th><th>Chi phí</th><th>% tổng</th>
+          </tr>
+        </thead>
+        <tbody id="priceBody"></tbody>
+        <tfoot id="priceFoot"></tfoot>
+      </table>
+    </div>
+    <p class="fine" id="fine"></p>
+  </section>
+
+  <p class="disclaimer">Dữ liệu thật từ <b>~/.claude/projects</b> · chi tiết 7 ngày, tổng hợp 90 ngày trong <b>data/usage.json</b> · tự làm mới mỗi 30 giây · Prometheus: <b>/metrics</b><br>
+    Chi phí là quy đổi theo giá API niêm yết; nếu dùng gói Pro/Max thì bạn không bị tính tiền theo số này.</p>
+</div>
+
+<div class="ftip" id="ftip"></div>
+
+<script src="/analytics.js"></script>
+<script>
+/* =========================================================================
+   1. HẰNG SỐ & TRẠNG THÁI
+   ========================================================================= */
+const A = window.Analytics;
+const { MIN, HOUR, DAY, pad } = A;
+
+const TYPES = [
+  { key: 'i',  label: 'Đầu vào',      short: 'Input',     v: '--t-i'  },
+  { key: 'cr', label: 'Cache đọc',     short: 'Cache đọc', v: '--t-cr' },
+  { key: 'w5', label: 'Ghi cache 5′',  short: 'Ghi 5′',    v: '--t-w5' },
+  { key: 'w1', label: 'Ghi cache 1h',  short: 'Ghi 1h',    v: '--t-w1' },
+  { key: 'o',  label: 'Đầu ra',        short: 'Output',    v: '--t-o'  }
+];
+const TK = TYPES.map(t => t.key);
+// thứ tự xếp chồng: đọc cache ở đáy, đầu ra trên cùng
+const STACK = ['cr', 'i', 'w5', 'w1', 'o'];
+const typeOf = k => TYPES.find(t => t.key === k);
+const cvar = v => `var(${v})`;
+const DOW = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+const REFRESH_MS = 30e3;
+const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max', ''];
+
+let RANGE = '24h', metric = 'token', animate = true;
+let R = null, P = null, ROWS = [], CHAINS = null, BREAKS = [], SUM = null, CFG = null;
+let selectedSession = null;
+
+/* =========================================================================
+   2. ĐỊNH DẠNG
+   ========================================================================= */
+const nf = (n, d = 2) => n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+const tok = n => n >= 1e9 ? nf(n / 1e9, 2) + 'B'
+               : n >= 1e7 ? nf(n / 1e6, 0) + 'M'
+               : n >= 1e6 ? nf(n / 1e6, 1) + 'M'
+               : n >= 1e3 ? nf(n / 1e3, 1) + 'K' : String(Math.round(n));
+const usd      = n => '$' + nf(n, 2);
+const usdShort = n => n >= 1000 ? '$' + nf(n / 1000, 1) + 'k' : n >= 10 ? '$' + nf(n, 0) : '$' + nf(n, 2);
+const pct      = (a, b) => b ? nf(a / b * 100, 1) + '%' : '0%';
+const els = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const hhmm = t => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const dShort = t => { const d = new Date(t); return `${DOW[d.getDay()]} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`; };
+const dur = ms => {
+  const m = Math.round(ms / MIN);
+  if (m < 60) return m + ' phút';
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h} giờ ${m % 60 ? (m % 60) + ' phút' : ''}`.trim() : `${Math.floor(h / 24)} ngày ${h % 24} giờ`;
+};
+const agentName = a => a === 'main' ? 'Phiên chính' : a === 'subagent' ? 'Subagent' : a;
+const iconSVG = m => `<span class="m-icon" style="background:${m.color}">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 0c.9 6.6 5.4 11.1 12 12-6.6.9-11.1 5.4-12 12-.9-6.6-5.4-11.1-12-12C6.6 11.1 11.1 6.6 12 0Z"/></svg>
+</span>`;
+const badge = m => m.badge
+  ? `<span class="badge-m" style="background:${m.badge[0]};color:${m.badge[1]}">${esc(m.short)}</span>`
+  : `<span class="badge-m">${esc(m.short)}</span>`;
+const deltaHTML = (cur, prev) => {
+  if (!prev) return cur ? '<span class="delta">mới</span>' : '';
+  const d = (cur - prev) / prev * 100;
+  return `<span class="delta">${d >= 0 ? '▲' : '▼'} ${nf(Math.abs(d), 1)}%</span>`;
+};
+const ICON = {
+  good: '<svg viewBox="0 0 24 24"><path d="m5 12 5 5 9-10" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  warn: '<svg viewBox="0 0 24 24"><path d="M12 8v5m0 3.5v.5M10.3 3.9 2.6 17.3A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.7-2.7L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke-linecap="round"/></svg>',
+  bad:  '<svg viewBox="0 0 24 24"><path d="M12 7v6m0 4v.5M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z" stroke-linecap="round"/></svg>',
+  info: '<svg viewBox="0 0 24 24"><path d="M12 11v6m0-10v.5M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z" stroke-linecap="round"/></svg>'
+};
+const statusHTML = (kind, text) => `<span class="status ${kind}">${ICON[kind]}${text}</span>`;
+
+const isDark = () => {
+  const t = document.documentElement.dataset.theme;
+  return t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+};
+
+let sparkId = 0;
+function spark(vals, colorVar) {
+  const max = Math.max(...vals), min = Math.min(...vals), n = vals.length, span = (max - min) || 1;
+  const X = i => i / Math.max(1, n - 1) * 100;
+  const Y = v => 25.5 - 22 * (v - min) / span;
+  const line = vals.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(2)} ${Y(v).toFixed(2)}`).join(' ');
+  const id = 'sp' + (++sparkId);
+  return `<svg class="spark" viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true">
+    <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" style="stop-color:var(${colorVar});stop-opacity:.4"/>
+      <stop offset="100%" style="stop-color:var(${colorVar});stop-opacity:0"/>
+    </linearGradient></defs>
+    <path d="${line} L100 26 L0 26 Z" fill="url(#${id})"/>
+    <path d="${line}" fill="none" style="stroke:var(${colorVar})" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+/* --- SVG & tooltip nổi dùng chung --- */
+const NS = 'http://www.w3.org/2000/svg';
+const mk = (n, a = {}) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); return e; };
+const txt = (parent, x, y, s, anchor = 'end') => {
+  const t = mk('text', { x, y, 'text-anchor': anchor, class: 'ax' });
+  t.textContent = s; parent.appendChild(t); return t;
+};
+const niceMax = v => {
+  if (!isFinite(v) || v <= 0) return 1;
+  const raw = v / 4, p = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / p;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p * 4;
+};
+const ftip = els('ftip');
+function showF(html, el) {
+  ftip.innerHTML = html;
+  ftip.classList.add('show');
+  const r = el.getBoundingClientRect();
+  const w = ftip.offsetWidth;
+  ftip.style.left = Math.max(w / 2 + 8, Math.min(innerWidth - w / 2 - 8, r.left + r.width / 2)) + 'px';
+  ftip.style.top = Math.max(ftip.offsetHeight + 20, r.top) + 'px';
+}
+const hideF = () => ftip.classList.remove('show');
+addEventListener('scroll', hideF, { passive: true });
+
+/* =========================================================================
+   3. NẠP DỮ LIỆU
+   ========================================================================= */
+function decode(data) {
+  const L = data.lists;
+  return data.rows.map(a => {
+    const r = {};
+    data.cols.forEach((c, j) => { r[c] = L[c] ? L[c][a[j]] : a[j]; });
+    return r;
+  });
+}
+
+function ingest(data) {
+  R = data;
+  CFG = data.config;
+  P = A.pricing(data.meta);
+  ROWS = A.enrich(decode(data), P);
+  CHAINS = A.chains(ROWS);
+  BREAKS = A.cacheBreaks(CHAINS, P);
+  SUM = A.summary(ROWS, data.now);
+}
+
+/* =========================================================================
+   4. TÍNH THEO KHOẢNG THỜI GIAN ĐANG XEM
+   ========================================================================= */
+const emptyBucket = () => ({ byType: Object.fromEntries(TK.map(k => [k, { tok: 0, cost: 0 }])), tok: 0, cost: 0, n: 0 });
+function addTo(b, r) {
+  for (const k of TK) { b.byType[k].tok += r[k]; b.byType[k].cost += r.c[k]; }
+  b.tok += r.tok; b.cost += r.c.total; b.n += 1;
+}
+
+const D = {};
+function compute() {
+  const now = R.now;
+  const isWeek = RANGE === '7d';
+  D.isWeek = isWeek;
+  D.per  = isWeek ? '7 ngày' : '24h';
+  D.unit = isWeek ? 'ngày' : 'giờ';
+
+  // mốc từng cột: 24 giờ tròn (giờ hiện tại là cột cuối) hoặc 7 ngày (hôm nay là cột cuối)
+  let starts;
+  if (isWeek) {
+    const today = A.startOfDay(now);
+    starts = [...Array(8)].map((_, i) => { const d = new Date(today); d.setDate(d.getDate() + i - 6); return d.getTime(); });
+  } else {
+    const h0 = A.floorHour(now) - 23 * HOUR;
+    starts = [...Array(25)].map((_, i) => h0 + i * HOUR);
+  }
+  D.points = starts.length - 1;
+  D.labels = starts.slice(0, -1).map(t => {
+    const d = new Date(t);
+    return isWeek ? { label: DOW[d.getDay()], date: `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`, t } : { label: pad(d.getHours()) + 'h', t };
+  });
+  const from = starts[0], to = starts[starts.length - 1];
+  D.from = from; D.to = to;
+  const bucketOf = t => {
+    if (t < from || t >= to) return -1;
+    if (!isWeek) return Math.floor((t - from) / HOUR);
+    for (let i = D.points - 1; i >= 0; i--) if (t >= starts[i]) return i;
+    return -1;
+  };
+
+  D.hourly = [...Array(D.points)].map(emptyBucket);
+  D.prev   = [...Array(D.points)].map(emptyBucket);
+  D.hasPrev = !isWeek;   // chỉ lưu 7 ngày chi tiết nên không có tuần trước để so
+  D.rows = [];
+  const models = new Map(), sessions = new Map(), agents = new Map(), efforts = new Map();
+  let thinking = 0, saving = 0;
+
+  for (const r of ROWS) {
+    const i = bucketOf(r.t);
+    if (i < 0) {
+      if (D.hasPrev) { const j = bucketOf(r.t + DAY); if (j >= 0) addTo(D.prev[j], r); }
+      continue;
+    }
+    D.rows.push(r);
+    addTo(D.hourly[i], r);
+    thinking += r.th;
+    saving += P.saving(r);
+
+    const m = P.modelOf(r.model);
+    const mm = models.get(m) || { tok: 0, cost: 0 };
+    mm.tok += r.tok; mm.cost += r.c.total; models.set(m, mm);
+
+    const s = sessions.get(r.session) || { id: r.session, project: r.project, tok: 0, cost: 0, byModel: new Map(), last: 0, sub: 0 };
+    s.tok += r.tok; s.cost += r.c.total; s.last = Math.max(s.last, r.t);
+    if (r.chain) s.sub += r.c.total;
+    s.byModel.set(m, (s.byModel.get(m) || 0) + r.c.total + r.tok * 1e-12);
+    sessions.set(r.session, s);
+
+    const ag = agents.get(r.agent) || { tok: 0, cost: 0, n: 0 };
+    ag.tok += r.tok; ag.cost += r.c.total; ag.n++; agents.set(r.agent, ag);
+
+    const ef = efforts.get(r.effort) || { o: 0, cost: 0, n: 0 };
+    ef.o += r.o; ef.cost += r.c.total; ef.n++; efforts.set(r.effort, ef);
+  }
+
+  const sumType = (arr, k, f) => arr.reduce((a, h) => a + h.byType[k][f], 0);
+  D.typeTotal = Object.fromEntries(TK.map(k => [k, { tok: sumType(D.hourly, k, 'tok'), cost: sumType(D.hourly, k, 'cost') }]));
+  D.totalTok  = D.hourly.reduce((a, h) => a + h.tok, 0);
+  D.totalCost = D.hourly.reduce((a, h) => a + h.cost, 0);
+  D.requests  = D.hourly.reduce((a, h) => a + h.n, 0);
+  D.prevTotalTok  = D.prev.reduce((a, h) => a + h.tok, 0);
+  D.prevTotalCost = D.prev.reduce((a, h) => a + h.cost, 0);
+  D.prevOut = sumType(D.prev, 'o', 'tok');
+  D.thinking = thinking;
+
+  const used = [...models.keys()];
+  D.models = P.models.filter(m => m.core || used.includes(m))
+    .map(m => ({ ...m, tok: models.get(m)?.tok || 0, cost: models.get(m)?.cost || 0 }))
+    .sort((a, b) => (b.cost - a.cost) || (b.tok - a.tok));
+  D.models.forEach(m => m.share = D.totalTok ? m.tok / D.totalTok : 0);
+
+  D.sessionList = [...sessions.values()].map(s => {
+    const top = [...s.byModel.entries()].sort((a, b) => b[1] - a[1]);
+    return { ...s, model: top.length === 1 ? top[0][0] : null };
+  }).sort((a, b) => b.cost - a.cost);
+  D.sessions = D.sessionList.length;
+  D.agents = [...agents].map(([name, v]) => ({ name, ...v })).sort((a, b) => (a.name === 'main' ? -1 : b.name === 'main' ? 1 : b.cost - a.cost));
+  D.efforts = [...efforts].map(([name, v]) => ({ name, ...v }))
+    .sort((a, b) => EFFORT_ORDER.indexOf(a.name) - EFFORT_ORDER.indexOf(b.name));
+
+  D.cumul   = D.hourly.reduce((a, h) => (a.push((a[a.length - 1] || 0) + h.cost), a), []);
+  D.peakIdx = D.hourly.reduce((b, h, i) => h.tok > D.hourly[b].tok ? i : b, 0);
+  D.meanTok  = D.totalTok / D.points;
+  D.meanCost = D.totalCost / D.points;
+  D.blended  = D.totalTok ? D.totalCost / D.totalTok * 1e6 : 0;
+
+  const cacheBase = D.typeTotal.i.tok + D.typeTotal.cr.tok + D.typeTotal.w5.tok + D.typeTotal.w1.tok;
+  D.cacheHit    = cacheBase ? D.typeTotal.cr.tok / cacheBase : 0;
+  D.cacheSaving = saving;
+  D.noCacheCost = D.totalCost + saving;
+  D.breaks = BREAKS.filter(b => b.t >= from && b.t < to);
+}
+
+/* =========================================================================
+   5. CỬA SỔ 5 GIỜ & NGÂN SÁCH
+   ========================================================================= */
+function renderWindow() {
+  const s = SUM, w = s.window, now = R.now;
+  const ratio = s.avgWindowCost ? s.projected / s.avgWindowCost : 0;
+  const lim = CFG.alertWindowRatio || 2;
+
+  if (!w) {
+    els('winStatus').innerHTML = statusHTML('info', 'Không có cửa sổ đang mở');
+    els('winNow').innerHTML = `<div class="card-sub">Cửa sổ mới sẽ bắt đầu khi bạn gửi tin nhắn tiếp theo.
+      Trung bình mỗi cửa sổ: <b>${usd(s.avgWindowCost)}</b> · lớn nhất: <b>${usd(s.maxWindowCost)}</b></div>`;
+  } else {
+    const kind = !s.avgWindowCost ? 'info' : ratio > lim ? 'bad' : ratio > 1 ? 'warn' : 'good';
+    const label = !s.avgWindowCost ? 'Chưa đủ dữ liệu so sánh'
+      : ratio > lim ? `Dự kiến gấp ${nf(ratio, 1)}× trung bình`
+      : ratio > 1 ? `Cao hơn TB ${nf((ratio - 1) * 100, 0)}%` : 'Trong mức bình thường';
+    els('winStatus').innerHTML = statusHTML(kind, label);
+    const elapsed = Math.min(1, (now - w.start) / A.WINDOW);
+    els('winNow').innerHTML = `
+      <div class="hero">
+        <div><div class="big">${usd(w.cost)}</div><div class="big-sub">${tok(w.tok)} token · ${w.n} lượt trong cửa sổ</div></div>
+        <div><div class="countdown">${dur(Math.max(0, w.end - now))}</div><div class="big-sub">đến khi reset lúc ${hhmm(w.end)}</div></div>
+        <div><div class="countdown">${usd(s.burn.costPerMin * 60)}<span style="font-size:13px;color:var(--muted);font-weight:500">/giờ</span></div>
+          <div class="big-sub">tốc độ 30 phút qua · ${tok(s.burn.tokPerMin)} token/phút</div></div>
+        <div><div class="countdown">${usd(s.projected)}</div><div class="big-sub">dự kiến cả cửa sổ · TB ${usd(s.avgWindowCost)}</div></div>
+      </div>
+      <div class="tline"><i style="width:${elapsed * 100}%"></i></div>
+      <div class="tline-l"><span>${hhmm(w.start)}</span><span>đã qua ${nf(elapsed * 100, 0)}%</span><span>${hhmm(w.end)}</span></div>`;
+  }
+  renderWindowChart();
+}
+
+function renderWindowChart() {
+  const svg = els('winChart'); svg.textContent = '';
+  const list = SUM.windows.slice(-18);
+  if (!list.length) return;
+  const V = { w: 720, h: 150, l: 54, r: 10, t: 12, b: 24 };
+  const pw = V.w - V.l - V.r, ph = V.h - V.t - V.b;
+  const max = niceMax(Math.max(...list.map(w => w.cost), SUM.avgWindowCost));
+  const band = pw / list.length, bw = Math.min(band * .68, 30);
+  [0, .5, 1].forEach(f => {
+    const y = V.t + ph - ph * f;
+    svg.appendChild(mk('line', { x1: V.l, x2: V.l + pw, y1: y, y2: y, class: 'gl' }));
+    txt(svg, V.l - 10, y + 3.5, usdShort(max * f));
+  });
+  if (SUM.avgWindowCost) {
+    const y = V.t + ph - ph * SUM.avgWindowCost / max;
+    svg.appendChild(mk('line', { x1: V.l, x2: V.l + pw, y1: y, y2: y, class: 'ref', 'stroke-dasharray': '4 4' }));
+    txt(svg, V.l + pw, y - 5, 'TB ' + usdShort(SUM.avgWindowCost));
+  }
+  list.forEach((w, i) => {
+    const active = w === SUM.window;
+    const h = Math.max(2, ph * w.cost / max);
+    const x = V.l + band * i + (band - bw) / 2;
+    svg.appendChild(mk('rect', { x, y: V.t + ph - h, width: bw, height: h, rx: 3,
+      style: `fill:var(${active ? '--t-o' : '--t-w5'});opacity:${active ? 1 : .55}` }));
+    if (i % 3 === 0 || active) txt(svg, x + bw / 2, V.h - 8, active ? 'Hiện tại' : `${DOW[new Date(w.start).getDay()]} ${pad(new Date(w.start).getHours())}h`, 'middle');
+    const hit = mk('rect', { x: V.l + band * i, y: V.t, width: band, height: ph, fill: 'transparent' });
+    hit.addEventListener('mouseenter', () => showF(`<div class="t-head">${dShort(w.start)} · ${hhmm(w.start)}–${hhmm(w.end)}${active ? ' (hiện tại)' : ''}</div>
+      <div class="t-row">Chi phí<span class="v">${usd(w.cost)}</span></div>
+      <div class="t-row">Token<span class="v">${tok(w.tok)}</span></div>
+      <div class="t-row">Lượt<span class="v">${w.n}</span></div>
+      <div class="t-prev">Hoạt động ${hhmm(w.first)}–${hhmm(w.last)}</div>`, hit));
+    hit.addEventListener('mouseleave', hideF);
+    svg.appendChild(hit);
+  });
+}
+
+function budgetRow(label, spent, limit, foot) {
+  if (!(limit > 0)) {
+    return `<div class="budget"><div class="b-top"><span>${label}</span><b>${usd(spent)}</b></div>
+      <div class="b-foot">Chưa đặt ngân sách</div></div>`;
+  }
+  const p = spent / limit;
+  const cls = p >= 1 ? 'bad' : p >= .8 ? 'warn' : '';
+  const st = p >= 1 ? statusHTML('bad', 'Vượt ngân sách') : p >= .8 ? statusHTML('warn', 'Sắp chạm') : '';
+  return `<div class="budget"><div class="b-top"><span>${label} ${st}</span><span><b>${usd(spent)}</b> / ${usd(limit)}</span></div>
+    <div class="b-track"><i class="${cls}" style="width:${Math.min(100, p * 100)}%"></i></div>
+    <div class="b-foot">${nf(p * 100, 0)}% · ${foot}</div></div>`;
+}
+
+function renderBudget() {
+  const now = new Date(R.now);
+  const leftDay = A.startOfDay(R.now) + DAY - R.now;
+  const weekEnd = A.startOfWeek(R.now) + 7 * DAY;
+  els('budgets').innerHTML =
+    budgetRow('Hôm nay', SUM.today, CFG.budgetDay, `còn ${dur(leftDay)} đến hết ngày`) +
+    budgetRow('Tuần này', SUM.week, CFG.budgetWeek, `còn ${dur(weekEnd - R.now)} đến hết tuần`);
+
+  const f = els('cfgForm');
+  if (!f.contains(document.activeElement)) {
+    for (const k of ['budgetDay', 'budgetWeek', 'alertCacheHit', 'alertContext', 'alertWindowRatio']) f.elements[k].value = CFG[k];
+    f.elements.notify.checked = !!CFG.notify;
+  }
+
+  const list = (R.alerts || []).slice(0, 5);
+  els('alerts').innerHTML = `<h3>Cảnh báo gần đây</h3>` + (list.length
+    ? list.map(a => `<div class="alert"><i class="a-ic ${a.level}"></i><b>${esc(a.title)}</b>
+        <span class="a-t">${dShort(a.t)} ${hhmm(a.t)}</span><span class="a-b">${esc(a.body)}</span></div>`).join('')
+    : `<div class="card-sub" style="margin:0">Chưa có cảnh báo nào${now ? '' : ''}</div>`);
+}
+
+els('cfgForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = e.target, body = {};
+  for (const k of ['budgetDay', 'budgetWeek', 'alertCacheHit', 'alertContext', 'alertWindowRatio']) body[k] = Number(f.elements[k].value) || 0;
+  body.notify = f.elements.notify.checked;
+  try {
+    const res = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    CFG = await res.json();
+    els('cfgMsg').textContent = 'Đã lưu ' + hhmm(Date.now());
+    document.activeElement.blur();
+    load();
+  } catch (err) {
+    els('cfgMsg').textContent = 'Lưu thất bại: ' + err.message;
+  }
+});
+els('testNotify').addEventListener('click', async () => {
+  try { await fetch('/api/test-notify', { method: 'POST' }); els('cfgMsg').textContent = 'Đã gửi thông báo thử'; }
+  catch { els('cfgMsg').textContent = 'Không gửi được'; }
+});
+
+/* =========================================================================
+   6. BIỂU ĐỒ CHÍNH (giữ như bản gốc)
+   ========================================================================= */
+const VB = { w: 720, h: 252, l: 54, r: 10, t: 14, b: 30 };
+const PW = VB.w - VB.l - VB.r, PH = VB.h - VB.t - VB.b;
+let BAND = PW / 24, BARW = 19;
+const wrap = els('chartWrap'), svg = els('bars'), tip = els('tip');
+let maxY = 1;
+
+const val  = (h, k) => metric === 'cost' ? h.byType[k].cost : h.byType[k].tok;
+const tot  = h => metric === 'cost' ? h.cost : h.tok;
+const pVal = i => metric === 'cost' ? D.prev[i].cost : D.prev[i].tok;
+const axis = v => metric === 'cost' ? usdShort(v) : tok(v);
+const cx   = i => VB.l + BAND * (i + .5);
+
+function renderKPIs() {
+  const cmp = ' so với 24h trước';
+  els('kpis').innerHTML = [
+    { label: `Tổng token · ${D.per}`, value: tok(D.totalTok),
+      foot: D.hasPrev ? deltaHTML(D.totalTok, D.prevTotalTok) + cmp : `trung bình ${tok(D.meanTok)}/ngày`,
+      series: D.hourly.map(h => h.tok), color: '--t-w5' },
+    { label: 'Chi phí ước tính', value: usd(D.totalCost),
+      foot: (D.hasPrev ? deltaHTML(D.totalCost, D.prevTotalCost) + ' · ' : '') + `${usd(D.blended)}/1M token`,
+      series: D.hourly.map(h => h.cost), color: '--t-o' },
+    { label: 'Token vào (input)', value: tok(D.typeTotal.i.tok),
+      foot: `+ ${tok(D.typeTotal.cr.tok)} đọc cache · ${tok(D.typeTotal.w5.tok + D.typeTotal.w1.tok)} ghi cache`,
+      series: D.hourly.map(h => h.tok - h.byType.o.tok), color: '--t-i' },
+    { label: 'Token ra (output)', value: tok(D.typeTotal.o.tok),
+      foot: (D.hasPrev ? deltaHTML(D.typeTotal.o.tok, D.prevOut) + ' · ' : '') + `${tok(D.thinking)} thinking · ${usd(D.typeTotal.o.cost)}`,
+      series: D.hourly.map(h => h.byType.o.tok), color: '--t-w1' }
+  ].map(k => `
+    <div class="kpi">
+      <div class="k-label">${k.label}</div>
+      <div class="k-value">${k.value}</div>
+      <div class="k-foot">${k.foot}</div>
+      ${spark(k.series, k.color)}
+    </div>`).join('');
+}
+
+function renderLegend() {
+  els('legend').innerHTML =
+    STACK.map(k => `<span><i class="sw" style="background:${cvar(typeOf(k).v)}"></i>${typeOf(k).short}</span>`).join('')
+    + (D.hasPrev ? `<span><i class="dash"></i>Hôm qua</span>` : '')
+    + `<span class="mean"><i class="dash" style="border-top-style:dotted"></i>TB <b>${axis(metric === 'cost' ? D.meanCost : D.meanTok)}</b>/${D.unit}</span>`;
+}
+
+function renderBars() {
+  svg.textContent = '';
+  BAND = PW / D.points;
+  BARW = Math.min(BAND * 0.7, 62);
+  const peaks = D.hourly.map(tot);
+  if (D.hasPrev) D.prev.forEach((_, i) => peaks.push(pVal(i)));
+  maxY = niceMax(Math.max(...peaks));
+
+  for (let i = 0; i <= 4; i++) {
+    const y = VB.t + PH - PH * i / 4;
+    svg.appendChild(mk('line', { x1: VB.l, x2: VB.l + PW, y1: y, y2: y, class: 'gl' }));
+    txt(svg, VB.l - 10, y + 3.5, axis(maxY * i / 4));
+  }
+  const yMean = VB.t + PH - PH * (metric === 'cost' ? D.meanCost : D.meanTok) / maxY;
+  svg.appendChild(mk('line', { x1: VB.l, x2: VB.l + PW, y1: yMean, y2: yMean, class: 'ref', 'stroke-width': 1, 'stroke-dasharray': '2 3' }));
+
+  const step = D.points > 12 ? 3 : 1;
+  D.labels.forEach((lb, i) => {
+    if (i % step && i !== D.points - 1) return;
+    if (i !== D.points - 1 && i > D.points - 3 && step > 1) return;
+    txt(svg, cx(i), VB.h - 10, i === D.points - 1 ? (D.isWeek ? 'Hôm nay' : 'Giờ này') : lb.label, 'middle');
+  });
+
+  D.hourly.forEach((h, i) => {
+    if (!tot(h)) { svg.appendChild(mk('g', { class: 'bar' })); return; }
+    const x = VB.l + BAND * i + (BAND - BARW) / 2;
+    const hgt = Math.max(2, PH * tot(h) / maxY), yTop = VB.t + PH - hgt;
+    const clip = mk('clipPath', { id: 'clip' + i });
+    clip.appendChild(mk('rect', { x, y: yTop, width: BARW, height: hgt, rx: 3 }));
+    svg.appendChild(clip);
+    const g = mk('g', { class: 'bar', 'clip-path': `url(#clip${i})` });
+    let acc = 0;
+    STACK.forEach(k => {
+      const v = val(h, k);
+      if (!v) return;
+      const segH = PH * v / maxY;
+      g.appendChild(mk('rect', { x, y: VB.t + PH - acc - segH, width: BARW, height: Math.max(segH, .6), style: `fill:${cvar(typeOf(k).v)}` }));
+      acc += segH;
+    });
+    svg.appendChild(g);
+  });
+
+  if (D.hasPrev) {
+    svg.appendChild(mk('path', {
+      id: 'prevLine', class: 'ref',
+      d: D.prev.map((_, i) => `${i ? 'L' : 'M'}${cx(i).toFixed(1)} ${(VB.t + PH - PH * pVal(i) / maxY).toFixed(1)}`).join(' '),
+      fill: 'none', 'stroke-width': 1.6, 'stroke-dasharray': '4 3', 'stroke-linejoin': 'round'
+    }));
+  }
+
+  D.hourly.forEach((h, i) => {
+    const hit = mk('rect', { x: VB.l + BAND * i, y: VB.t, width: BAND, height: PH, fill: 'transparent' });
+    hit.dataset.i = i;
+    hit.style.pointerEvents = 'all';
+    hit.style.cursor = 'crosshair';
+    svg.appendChild(hit);
+  });
+  svg.appendChild(mk('line', { id: 'guide', y1: VB.t, y2: VB.t + PH, class: 'ref', 'stroke-width': 1, 'stroke-dasharray': '3 3' }));
+
+  if (animate) {
+    [...svg.querySelectorAll('g.bar')].forEach((g, i) => {
+      g.style.transformBox = 'fill-box';
+      g.style.transformOrigin = 'bottom';
+      g.animate([{ transform: 'scaleY(0)' }, { transform: 'scaleY(1)' }],
+        { duration: 460, delay: i * 14, easing: 'cubic-bezier(.2,.7,.3,1)', fill: 'both' });
+    });
+  }
+  renderLegend();
+}
+
+function showTip(i, hit) {
+  const h = D.hourly[i];
+  svg.classList.add('dim');
+  [...svg.querySelectorAll('g.bar')].forEach((g, k) => g.classList.toggle('on', k === i));
+  const gx = cx(i), guide = els('guide');
+  guide.setAttribute('x1', gx); guide.setAttribute('x2', gx); guide.style.opacity = 1;
+
+  const head = D.isWeek
+    ? `${D.labels[i].label} · ${D.labels[i].date}`
+    : `${D.labels[i].label} – ${pad((parseInt(D.labels[i].label, 10) + 1) % 24)}h`;
+  let prevLine = '';
+  if (D.hasPrev) {
+    const prev = D.prev[i].tok, delta = prev ? (h.tok - prev) / prev * 100 : 0;
+    prevLine = `<div class="t-prev">Hôm qua ${tok(prev)}${prev ? ` · ${delta >= 0 ? '+' : '−'}${nf(Math.abs(delta), 0)}%` : ''}</div>`;
+  }
+  tip.innerHTML = `
+    <div class="t-head">${head}</div>
+    ${STACK.map(k => {
+      const t = typeOf(k);
+      return `<div class="t-row"><i class="sw" style="background:${cvar(t.v)}"></i>${t.label}
+        <span class="v">${tok(h.byType[k].tok)}</span><span class="v money">${usd(h.byType[k].cost)}</span></div>`;
+    }).join('')}
+    <div class="t-total"><span>Tổng ${tok(h.tok)}</span><span>${usd(h.cost)}</span><span>${h.n} lượt</span></div>
+    ${prevLine}`;
+  tip.classList.add('show');
+
+  const r = hit.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+  tip.style.left = Math.max(90, Math.min(wr.width - 90, r.left + r.width / 2 - wr.left)) + 'px';
+  const scale  = wr.width / VB.w;
+  const barTop = (VB.t + PH - PH * tot(h) / maxY) * scale;
+  tip.style.top = Math.max(tip.offsetHeight + 6, barTop - 10) + 'px';
+}
+svg.addEventListener('mouseover', e => {
+  const hit = e.target.closest('rect[data-i]');
+  if (hit) showTip(+hit.dataset.i, hit);
+});
+wrap.addEventListener('mouseleave', () => {
+  tip.classList.remove('show');
+  svg.classList.remove('dim');
+  svg.querySelectorAll('g.bar.on').forEach(g => g.classList.remove('on'));
+  const g = els('guide'); if (g) g.style.opacity = 0;
+});
+
+function renderCum() {
+  const s = els('cum'); s.textContent = '';
+  const p = { l: 54, r: 10, t: 12, b: 20 };
+  const w = 720 - p.l - p.r, hgt = 96 - p.t - p.b;
+  const last = D.cumul[D.cumul.length - 1] || 0;
+  const max = (last || 1) * 1.03;
+  const n = D.points - 1;
+  const X = i => p.l + w * i / n;
+  const Y = v => p.t + hgt - hgt * v / max;
+  const defs = mk('defs');
+  const grad = mk('linearGradient', { id: 'gCum', x1: 0, y1: 0, x2: 0, y2: 1 });
+  grad.appendChild(mk('stop', { offset: '0%', style: 'stop-color:var(--t-o);stop-opacity:.3' }));
+  grad.appendChild(mk('stop', { offset: '100%', style: 'stop-color:var(--t-o);stop-opacity:0' }));
+  defs.appendChild(grad); s.appendChild(defs);
+  txt(s, p.l - 10, Y(0) + 3.5, usdShort(0));
+  txt(s, p.l - 10, Y(max) + 8, usdShort(max));
+  s.appendChild(mk('line', { x1: p.l, x2: p.l + w, y1: Y(0), y2: Y(0), class: 'gl' }));
+  const line = D.cumul.map((v, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ');
+  s.appendChild(mk('path', { d: `${line} L ${X(n)} ${Y(0)} L ${X(0)} ${Y(0)} Z`, fill: 'url(#gCum)' }));
+  s.appendChild(mk('path', { d: line, fill: 'none', style: 'stroke:var(--t-o)', 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+  s.appendChild(mk('circle', { cx: X(n), cy: Y(last), r: 3.5, style: 'fill:var(--t-o);stroke:var(--card)', 'stroke-width': 2 }));
+  txt(s, p.l, 92, D.labels[0].label, 'start');
+  txt(s, p.l + w, 92, D.isWeek ? 'hôm nay' : 'bây giờ');
+}
+
+function renderSide() {
+  const top = D.models[0];
+  els('modelInsight').innerHTML = top && top.tok
+    ? `<b>${esc(top.short)}</b> chiếm ${pct(top.tok, D.totalTok)} token và ${pct(top.cost, D.totalCost)} chi phí`
+    : `Chưa có lượt nào trong ${D.per}`;
+  let firstUnused = true;
+  els('byModel').innerHTML = D.models.map(m => {
+    if (m.tok === 0) {
+      const divide = firstUnused ? ' divide' : '';
+      firstUnused = false;
+      return `<div class="mrow is-unused${divide}">
+          <div class="m-name"><i class="sw" style="background:${m.color}"></i>${esc(m.short)} <span class="tag">không sử dụng</span></div>
+          <div class="m-val">—</div>
+          <div class="m-sub">0 token trong ${D.per}</div><div class="m-sub" style="text-align:right">0% chi phí</div>
+          <div class="bar-track"></div></div>`;
+    }
+    return `<div class="mrow">
+        <div class="m-name"><i class="sw" style="background:${m.color}"></i>${esc(m.short)}${m.unpriced ? ' <span class="tag">chưa có giá</span>' : ''}</div>
+        <div class="m-val">${usd(m.cost)}</div>
+        <div class="m-sub">${tok(m.tok)} token · ${nf(m.share * 100, 0)}% khối lượng</div>
+        <div class="m-sub" style="text-align:right">${pct(m.cost, D.totalCost)} chi phí</div>
+        <div class="bar-track"><span class="bar-fill" style="background:${m.color};width:${D.totalCost ? m.cost / D.totalCost * 100 : 0}%"></span></div>
+      </div>`;
+  }).join('');
+
+  els('mixBar').innerHTML = STACK.map(k =>
+    `<i style="background:${cvar(typeOf(k).v)};width:${D.totalTok ? D.typeTotal[k].tok / D.totalTok * 100 : 0}%"></i>`).join('');
+  els('mixList').innerHTML = STACK.map(k => {
+    const t = typeOf(k);
+    return `<div class="r"><i class="sw" style="background:${cvar(t.v)}"></i>${t.label}
+      <span class="v">${tok(D.typeTotal[k].tok)}</span><span class="p">${pct(D.typeTotal[k].tok, D.totalTok)}</span></div>`;
+  }).join('');
+}
+
+function renderMinis() {
+  const rq = D.requests, ss = D.sessions;
+  const extra = D.breaks.reduce((a, b) => a + b.extra, 0);
+  els('opsSub').textContent = `${rq} lượt trả lời trong ${D.per}` + (D.isWeek ? '' : ' · cột cuối là giờ hiện tại');
+  els('minis').innerHTML = [
+    ['Tỉ lệ cache hit',     nf(D.cacheHit * 100, 1) + '%'],
+    ['Cache đọc',           `${tok(D.typeTotal.cr.tok)} · ${usd(D.typeTotal.cr.cost)}`],
+    ['Cache ghi 5 phút',    `${tok(D.typeTotal.w5.tok)} · ${usd(D.typeTotal.w5.cost)}`],
+    ['Cache ghi 1h',        `${tok(D.typeTotal.w1.tok)} · ${usd(D.typeTotal.w1.cost)}`],
+    ['Số phiên',            nf(ss, 0)],
+    ['Số lượt trả lời',     nf(rq, 0)],
+    ['Token / lượt',        rq ? tok(D.totalTok / rq) : '—'],
+    ['Chi phí / lượt',      rq ? usd(D.totalCost / rq) : '—'],
+    ['Chi phí / phiên',     ss ? usd(D.totalCost / ss) : '—'],
+    ['Thinking (trong output)', `${tok(D.thinking)} · ${pct(D.thinking, D.typeTotal.o.tok)}`],
+    ['Tốn thêm do vỡ cache', `${usd(extra)} · ${D.breaks.filter(b => b.cause !== 'compact').length} lần`],
+    ['Tiết kiệm nhờ cache', usd(D.cacheSaving)]
+  ].map(([l, v]) => `<div class="mini"><div class="l">${l}</div><div class="v">${v}</div></div>`).join('');
+}
+
+/* =========================================================================
+   7. PHÂN TÍCH: heatmap, agent, effort
+   ========================================================================= */
+const RAMP_LIGHT = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95', '#0d366b'];
+const RAMP_DARK  = ['#173156', '#1c4f96', '#256abf', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'];
+const rampColor = f => { const r = isDark() ? RAMP_DARK : RAMP_LIGHT; return r[Math.min(r.length - 1, Math.floor(f * r.length))]; };
+
+function renderHeatmap() {
+  const today = A.startOfDay(R.now);
+  const days = [...Array(7)].map((_, i) => { const d = new Date(today); d.setDate(d.getDate() - 6 + i); return d.getTime(); });
+  const grid = days.map(() => Array(24).fill(null).map(() => ({ v: 0, tok: 0, cost: 0, n: 0 })));
+  for (const r of ROWS) {
+    const di = days.findIndex((d, k) => r.t >= d && (k === 6 || r.t < days[k + 1]));
+    if (di < 0) continue;
+    const c = grid[di][new Date(r.t).getHours()];
+    c.tok += r.tok; c.cost += r.c.total; c.n++;
+  }
+  let max = 0;
+  grid.forEach(row => row.forEach(c => { c.v = metric === 'cost' ? c.cost : c.tok; max = Math.max(max, c.v); }));
+  let html = '<span></span>' + [...Array(24)].map((_, h) => `<span class="hx">${h % 6 === 0 ? h + 'h' : ''}</span>`).join('');
+  grid.forEach((row, di) => {
+    html += `<span class="hl">${dShort(days[di])}</span>`;
+    row.forEach((c, h) => {
+      const bg = c.v ? rampColor(Math.sqrt(c.v / max)) : '';
+      html += `<span class="hc" data-d="${di}" data-h="${h}" ${bg ? `style="background:${bg}"` : ''}></span>`;
+    });
+  });
+  const hm = els('heatmap');
+  hm.innerHTML = html;
+  hm.onmouseover = e => {
+    const el = e.target.closest('.hc'); if (!el) return;
+    const c = grid[+el.dataset.d][+el.dataset.h], h = +el.dataset.h;
+    showF(`<div class="t-head">${dShort(days[+el.dataset.d])} · ${pad(h)}h–${pad((h + 1) % 24)}h</div>
+      <div class="t-row">Token<span class="v">${tok(c.tok)}</span></div>
+      <div class="t-row">Chi phí<span class="v">${usd(c.cost)}</span></div>
+      <div class="t-row">Lượt<span class="v">${c.n}</span></div>`, el);
+  };
+  hm.onmouseleave = hideF;
+
+  const hours = Array(24).fill(0);
+  grid.forEach(row => row.forEach((c, h) => hours[h] += c.v));
+  const peakH = hours.indexOf(Math.max(...hours));
+  els('hmSub').innerHTML = max ? `Đậm nhất lúc <b>${pad(peakH)}h–${pad((peakH + 1) % 24)}h</b> · theo ${metric === 'cost' ? 'chi phí' : 'token'}` : 'Chưa có dữ liệu';
+  const r = isDark() ? RAMP_DARK : RAMP_LIGHT;
+  els('hmScale').innerHTML = `Ít <i style="background:var(--tile)"></i>${r.map(c => `<i style="background:${c}"></i>`).join('')} Nhiều`;
+}
+
+function renderAgents() {
+  const total = D.agents.reduce((a, x) => a + x.cost, 0);
+  const sub = D.agents.filter(a => a.name !== 'main').reduce((a, x) => a + x.cost, 0);
+  els('agentSub').innerHTML = sub ? `Subagent chiếm <b>${pct(sub, total)}</b> chi phí ${D.per}` : `Không dùng subagent trong ${D.per}`;
+  els('byAgent').innerHTML = D.agents.length ? D.agents.map(a => `
+    <div class="mrow">
+      <div class="m-name">${esc(agentName(a.name))}</div>
+      <div class="m-val">${usd(a.cost)}</div>
+      <div class="m-sub">${a.n} lượt · ${tok(a.tok)} token</div>
+      <div class="m-sub" style="text-align:right">${pct(a.cost, total)}</div>
+      <div class="bar-track"><span class="bar-fill" style="background:var(${a.name === 'main' ? '--t-w5' : '--t-o'});width:${total ? a.cost / total * 100 : 0}%"></span></div>
+    </div>`).join('') : `<div class="empty">Chưa có dữ liệu</div>`;
+}
+
+function renderEffort() {
+  const total = D.efforts.reduce((a, x) => a + x.cost, 0);
+  const hi = D.efforts.filter(e => e.name === 'xhigh' || e.name === 'max').reduce((a, x) => a + x.cost, 0);
+  els('effortSub').innerHTML = total ? `xhigh/max chiếm <b>${pct(hi, total)}</b> chi phí ${D.per}` : `Chưa có dữ liệu`;
+  els('effortBody').innerHTML = D.efforts.length ? D.efforts.map(e => `
+    <tr><td>${esc(e.name || 'không rõ')}</td><td>${e.n}</td><td>${tok(e.o / e.n)}</td><td><b>${usd(e.cost / e.n)}</b></td></tr>`).join('')
+    : `<tr><td colspan="4" class="empty">Chưa có dữ liệu</td></tr>`;
+}
+
+/* =========================================================================
+   8. PHIÊN: bảng + chi tiết ngữ cảnh
+   ========================================================================= */
+const sessRow = (s, isRest) => {
+  const modelHTML = s.model ? badge(s.model) : `<span style="color:var(--muted)">${isRest ? '' : 'nhiều model'}</span>`;
+  const tag = isRest ? '' : `${String(s.id).slice(0, 8)} · ${D.isWeek ? dShort(s.last) + ' ' : ''}${hhmm(s.last)}`;
+  return `
+    <tr class="${isRest ? '' : 'click'}${s.id === selectedSession ? ' is-sel' : ''}" ${isRest ? '' : `data-s="${esc(s.id)}"`}>
+      <td class="s-name">${esc(s.project)}${tag ? `<span>${esc(tag)}</span>` : ''}</td>
+      <td>${modelHTML}</td>
+      <td>${tok(s.tok)}</td>
+      <td><b>${usd(s.cost)}</b></td>
+      <td class="c-bar"><div class="sbar"><i style="width:${D.totalCost ? s.cost / D.totalCost * 100 : 0}%;background:${(s.model || {}).color || 'var(--t-w5)'}"></i></div></td>
+      <td>${pct(s.cost, D.totalCost)}</td>
+    </tr>`;
+};
+
+function renderSessions() {
+  const top = D.sessionList.slice(0, 5);
+  const topTok  = top.reduce((a, s) => a + s.tok, 0);
+  const topCost = top.reduce((a, s) => a + s.cost, 0);
+  const rest    = D.sessions - top.length;
+  els('sessPeriod').textContent = D.per;
+  els('sessCount').textContent = D.sessions;
+  els('sessShare').textContent = pct(topCost, D.totalCost);
+  els('sessBody').innerHTML = top.length ? top.map(s => sessRow(s)).join('')
+    : `<tr><td colspan="6" class="empty">Chưa có phiên nào trong ${D.per}</td></tr>`;
+  els('sessFoot').innerHTML = rest > 0
+    ? sessRow({ project: `${rest} phiên còn lại`, tok: D.totalTok - topTok, cost: D.totalCost - topCost }, true) : '';
+}
+els('sessBody').addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-s]'); if (!tr) return;
+  selectSession(tr.dataset.s, true);
+});
+els('brBody').addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-s]'); if (!tr) return;
+  selectSession(tr.dataset.s, true);
+});
+
+function selectSession(id, scroll) {
+  selectedSession = id;
+  els('sessSelect').value = id;
+  renderSessionDetail();
+  renderSessions();
+  if (scroll) els('sessionCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+els('sessSelect').addEventListener('change', e => selectSession(e.target.value));
+
+function renderSessionPicker() {
+  const map = new Map();
+  for (const c of CHAINS.values()) {
+    const last = c.turns[c.turns.length - 1].t;
+    const m = map.get(c.session) || { id: c.session, project: c.project, last: 0, cost: 0 };
+    m.last = Math.max(m.last, last);
+    m.cost += c.turns.reduce((a, r) => a + r.c.total, 0);
+    map.set(c.session, m);
+  }
+  const list = [...map.values()].sort((a, b) => b.last - a.last);
+  if (!selectedSession || !map.has(selectedSession)) selectedSession = list[0] && list[0].id;
+  els('sessSelect').innerHTML = list.map(s =>
+    `<option value="${esc(s.id)}">${esc(s.project)} · ${esc(s.id.slice(0, 8))} · ${dShort(s.last)} ${hhmm(s.last)} · ${usd(s.cost)}</option>`).join('');
+  if (selectedSession) els('sessSelect').value = selectedSession;
+}
+
+function renderSessionDetail() {
+  const svgC = els('ctxChart'); svgC.textContent = '';
+  const main = CHAINS.get(selectedSession + '|');
+  const subs = [...CHAINS.values()].filter(c => c.session === selectedSession && c.chain);
+  if (!main) {
+    txt(svgC, 360, 110, 'Phiên này chỉ có subagent hoặc chưa có dữ liệu', 'middle');
+    els('sessMinis').innerHTML = ''; els('sessAdvice').hidden = true;
+    return;
+  }
+  const turns = main.turns;
+  const brk = new Map(BREAKS.filter(b => b.session === selectedSession && !b.chain).map(b => [b.t, b]));
+  const V = { w: 1100, h: 230, l: 54, r: 14, t: 14, b: 26 };
+  const pw = V.w - V.l - V.r, ph = V.h - V.t - V.b;
+  const peak = Math.max(...turns.map(r => r.ctx));
+  const thr = CFG.alertContext || 0;
+  const max = niceMax(Math.max(peak, thr && thr < peak * 1.6 ? thr : 0));
+  const n = turns.length;
+  const X = i => V.l + (n > 1 ? pw * i / (n - 1) : pw / 2);
+  const Y = v => V.t + ph - ph * v / max;
+
+  for (let i = 0; i <= 4; i++) {
+    const y = V.t + ph - ph * i / 4;
+    svgC.appendChild(mk('line', { x1: V.l, x2: V.l + pw, y1: y, y2: y, class: 'gl' }));
+    txt(svgC, V.l - 10, y + 3.5, tok(max * i / 4));
+  }
+  if (thr && thr <= max) {
+    svgC.appendChild(mk('line', { x1: V.l, x2: V.l + pw, y1: Y(thr), y2: Y(thr), style: 'stroke:var(--warn)', 'stroke-dasharray': '5 4' }));
+    txt(svgC, V.l + pw, Y(thr) - 5, 'Ngưỡng cảnh báo ' + tok(thr));
+  }
+  const line = turns.map((r, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(r.ctx).toFixed(1)}`).join(' ');
+  svgC.appendChild(mk('path', { d: `${line} L ${X(n - 1)} ${Y(0)} L ${X(0)} ${Y(0)} Z`, style: 'fill:var(--accent-soft)' }));
+  svgC.appendChild(mk('path', { d: line, fill: 'none', style: 'stroke:var(--t-o)', 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+  turns.forEach((r, i) => {
+    const b = brk.get(r.t);
+    if (b) svgC.appendChild(mk('circle', { cx: X(i), cy: Y(r.ctx), r: 4.5,
+      style: `fill:var(${b.cause === 'compact' ? '--muted' : '--bad'});stroke:var(--card)`, 'stroke-width': 2 }));
+  });
+  txt(svgC, V.l, V.h - 8, `#1 · ${dShort(turns[0].t)} ${hhmm(turns[0].t)}`, 'start');
+  txt(svgC, V.l + pw, V.h - 8, `#${n} · ${hhmm(turns[n - 1].t)}`);
+
+  // vùng rê chuột theo lượt
+  const guide = mk('line', { y1: V.t, y2: V.t + ph, class: 'ref', 'stroke-dasharray': '3 3', opacity: 0 });
+  svgC.appendChild(guide);
+  const hit = mk('rect', { x: V.l, y: V.t, width: pw, height: ph, fill: 'transparent' });
+  hit.addEventListener('mousemove', e => {
+    const box = svgC.getBoundingClientRect();
+    const xv = (e.clientX - box.left) / box.width * V.w;
+    const i = Math.max(0, Math.min(n - 1, Math.round((xv - V.l) / pw * (n - 1))));
+    const r = turns[i], b = brk.get(r.t);
+    guide.setAttribute('x1', X(i)); guide.setAttribute('x2', X(i)); guide.setAttribute('opacity', 1);
+    const anchor = { getBoundingClientRect: () => ({ left: box.left + X(i) / V.w * box.width, width: 0, top: box.top + Y(r.ctx) / V.h * box.height }) };
+    showF(`<div class="t-head">Lượt #${i + 1} · ${dShort(r.t)} ${hhmm(r.t)}</div>
+      <div class="t-row">Ngữ cảnh<span class="v">${tok(r.ctx)} (${nf(r.ctx / P.contextWindow * 100, 0)}%)</span></div>
+      <div class="t-row">Đầu ra<span class="v">${tok(r.o)}</span></div>
+      <div class="t-row">Chi phí<span class="v">${usd(r.c.total)}</span></div>
+      <div class="t-row">Model · effort<span class="v">${esc(P.modelOf(r.model).short)} · ${esc(r.effort || '—')}</span></div>
+      ${b ? `<div class="t-prev" style="color:var(${b.cause === 'compact' ? '--muted' : '--bad'})">${A.CAUSES[b.cause]} · ghi lại ${tok(b.tokens)}${b.extra ? ' · tốn thêm ' + usd(b.extra) : ''}</div>` : ''}`, anchor);
+  });
+  hit.addEventListener('mouseleave', () => { hideF(); guide.setAttribute('opacity', 0); });
+  svgC.appendChild(hit);
+
+  // số liệu phiên
+  const last = turns[n - 1];
+  const all = [...turns, ...subs.flatMap(c => c.turns)];
+  const cost = all.reduce((a, r) => a + r.c.total, 0);
+  const subCost = subs.reduce((a, c) => a + c.turns.reduce((x, r) => x + r.c.total, 0), 0);
+  const brs = BREAKS.filter(b => b.session === selectedSession && b.cause !== 'compact');
+  const extra = brs.reduce((a, b) => a + b.extra, 0);
+  const priceLast = P.modelOf(last.model).price;
+  const rereadNow = last.ctx * priceLast.cacheRead / 1e6;
+  const firstTen = turns.slice(0, 10), lastTen = turns.slice(-10);
+  const avg = list => list.reduce((a, r) => a + r.c.total, 0) / list.length;
+  els('sessMinis').innerHTML = [
+    ['Lượt', `${n}${subs.length ? ` + ${subs.reduce((a, c) => a + c.turns.length, 0)} subagent` : ''}`],
+    ['Ngữ cảnh hiện tại', `${tok(last.ctx)} · ${nf(last.ctx / P.contextWindow * 100, 0)}%`],
+    ['Lớn nhất', tok(peak)],
+    ['Chi phí phiên', `${usd(cost)}${subCost ? ` · sub ${usd(subCost)}` : ''}`],
+    ['$/lượt: 10 đầu → 10 cuối', `${usd(avg(firstTen))} → ${usd(avg(lastTen))}`],
+    ['Đọc lại ngữ cảnh mỗi lượt', usd(rereadNow)],
+    ['Vỡ cache', `${brs.length} lần · ${usd(extra)}`],
+    ['Hoạt động cuối', `${dShort(last.t)} ${hhmm(last.t)}`]
+  ].map(([l, v]) => `<div class="mini"><div class="l">${l}</div><div class="v">${v}</div></div>`).join('');
+
+  const tips = [];
+  if (thr && last.ctx >= thr) tips.push(`Ngữ cảnh đã <b>${tok(last.ctx)}</b> — mỗi lượt tốn ~${usd(rereadNow)} chỉ để đọc lại. Gõ <b>/compact</b> hoặc mở phiên mới cho việc tiếp theo.`);
+  else if (avg(lastTen) > 2.5 * avg(firstTen) && n >= 20) tips.push(`Chi phí mỗi lượt đã tăng ${nf(avg(lastTen) / avg(firstTen), 1)}× so với đầu phiên vì ngữ cảnh phình ra.`);
+  const exp = brs.filter(b => b.cause === 'expired');
+  if (exp.length) tips.push(`${exp.length} lần cache hết hạn vì nghỉ lâu (tốn ${usd(exp.reduce((a, b) => a + b.extra, 0))}). Quay lại sau thời gian dài thì nên /compact trước.`);
+  els('sessAdvice').hidden = !tips.length;
+  els('sessAdvice').innerHTML = tips.join('<br>');
+}
+
+/* =========================================================================
+   9. VỠ CACHE
+   ========================================================================= */
+const CAUSE_ADVICE = {
+  expired: 'Phần lớn do <b>nghỉ quá thời hạn cache</b> rồi gõ tiếp vào phiên dài. Quay lại sau thời gian dài thì /compact hoặc mở phiên mới sẽ rẻ hơn.',
+  model:   'Phần lớn do <b>đổi model giữa phiên</b> — cache gắn với từng model nên đổi là phải ghi lại toàn bộ.',
+  prefix:  'Phần lớn do <b>phần đầu prompt thay đổi</b> (sửa CLAUDE.md, bật/tắt MCP hay tool giữa phiên). Giữ các thứ đó cố định trong một phiên.',
+  compact: 'Chủ yếu là lượt ngay sau <b>compact</b> — việc ghi lại cache lúc này là bình thường.'
+};
+
+function renderBreaks() {
+  const list = D.breaks;
+  const real = list.filter(b => b.cause !== 'compact');
+  const extra = real.reduce((a, b) => a + b.extra, 0);
+  els('brSub').innerHTML = list.length
+    ? `<b>${real.length}</b> lần trong ${D.per} · tốn thêm <b>${usd(extra)}</b> (${pct(extra, D.totalCost)} chi phí) so với nếu đọc được từ cache`
+    : `Không có lần vỡ cache nào trong ${D.per}`;
+  const by = {};
+  for (const b of list) { const x = (by[b.cause] ||= { n: 0, extra: 0, tokens: 0 }); x.n++; x.extra += b.extra; x.tokens += b.tokens; }
+  const causes = Object.keys(A.CAUSES).filter(k => by[k]);
+  const maxN = Math.max(1, ...causes.map(k => by[k].n));
+  els('brCauses').innerHTML = causes.length ? causes.map(k => `
+    <div class="mrow">
+      <div class="m-name">${A.CAUSES[k]}</div><div class="m-val">${by[k].n} lần</div>
+      <div class="m-sub">ghi lại ${tok(by[k].tokens)}</div><div class="m-sub" style="text-align:right">${by[k].extra ? '+' + usd(by[k].extra) : '—'}</div>
+      <div class="bar-track"><span class="bar-fill" style="background:var(${k === 'compact' ? '--tile-2' : '--bad'});width:${by[k].n / maxN * 100}%"></span></div>
+    </div>`).join('') : `<div class="empty">Cache hoạt động tốt</div>`;
+  const top = [...list].sort((a, b) => b.extra - a.extra || b.t - a.t).slice(0, 8);
+  els('brBody').innerHTML = top.length ? top.map(b => `
+    <tr class="click" data-s="${esc(b.session)}">
+      <td>${D.isWeek ? dShort(b.t) + ' ' : ''}${hhmm(b.t)}</td>
+      <td>${esc(b.project)}<span style="color:var(--muted);font-size:12px"> ${esc(b.session.slice(0, 6))}${b.chain ? ' · ' + esc(agentName(b.agent)) : ''}</span></td>
+      <td>${A.CAUSES[b.cause]}</td>
+      <td>${dur(b.gap)}</td>
+      <td>${tok(b.tokens)}</td>
+      <td><b>${b.extra ? usd(b.extra) : '—'}</b></td>
+    </tr>`).join('') : `<tr><td colspan="6" class="empty">Không có</td></tr>`;
+  const main = causes.filter(k => k !== 'compact').sort((a, b) => by[b].extra - by[a].extra)[0];
+  els('brAdvice').hidden = !main;
+  if (main) els('brAdvice').innerHTML = CAUSE_ADVICE[main];
+}
+
+/* =========================================================================
+   10. LỊCH SỬ 90 NGÀY
+   ========================================================================= */
+function renderHistory() {
+  const daily = R.daily || {};
+  const today = A.startOfDay(R.now);
+  const keys = Object.keys(daily).sort();
+  const firstKey = keys[0];
+  const start = firstKey ? Math.max(A.dayStartOfKey(firstKey), today - 89 * DAY) : today;
+  const days = [];
+  for (let t = start; t <= today; ) {
+    const k = A.dayKey(t);
+    let cost = 0, tk = 0, n = 0;
+    for (const [mk_, v] of Object.entries(daily[k] || {})) {
+      const [model, fast] = mk_.split('|');
+      cost += P.cost({ model, fast: fast ? 1 : 0, i: v.i, o: v.o, w5: v.w5, w1: v.w1, cr: v.cr }).total;
+      tk += v.i + v.o + v.w5 + v.w1 + v.cr; n += v.n;
+    }
+    days.push({ t, k, cost, tok: tk, n });
+    const d = new Date(t); d.setDate(d.getDate() + 1); t = d.getTime();
+  }
+  const svgH = els('histChart'); svgH.textContent = '';
+  const V = { w: 1100, h: 200, l: 54, r: 10, t: 12, b: 24 };
+  const pw = V.w - V.l - V.r, ph = V.h - V.t - V.b;
+  const vOf = d => metric === 'cost' ? d.cost : d.tok;
+  const max = niceMax(Math.max(...days.map(vOf), 0));
+  const band = pw / Math.max(days.length, 1), bw = Math.max(1.5, Math.min(band * .72, 22));
+  for (let i = 0; i <= 4; i++) {
+    const y = V.t + ph - ph * i / 4;
+    svgH.appendChild(mk('line', { x1: V.l, x2: V.l + pw, y1: y, y2: y, class: 'gl' }));
+    txt(svgH, V.l - 10, y + 3.5, metric === 'cost' ? usdShort(max * i / 4) : tok(max * i / 4));
+  }
+  const labelEvery = Math.ceil(days.length / 14);
+  days.forEach((d, i) => {
+    const v = vOf(d);
+    const x = V.l + band * i + (band - bw) / 2;
+    if (v) {
+      const h = Math.max(1.5, ph * v / max);
+      svgH.appendChild(mk('rect', { x, y: V.t + ph - h, width: bw, height: h, rx: Math.min(3, bw / 2),
+        style: `fill:var(${d.t === today ? '--t-o' : '--t-w5'})` }));
+    }
+    if ((days.length - 1 - i) % labelEvery === 0) {
+      const dt = new Date(d.t);
+      const isLast = i === days.length - 1;
+      txt(svgH, isLast ? V.l + pw : x + bw / 2, V.h - 8, isLast ? 'Hôm nay' : `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}`, isLast ? 'end' : 'middle');
+    }
+    const hit = mk('rect', { x: V.l + band * i, y: V.t, width: band, height: ph, fill: 'transparent' });
+    hit.addEventListener('mouseenter', () => showF(`<div class="t-head">${dShort(d.t)}</div>
+      <div class="t-row">Chi phí<span class="v">${usd(d.cost)}</span></div>
+      <div class="t-row">Token<span class="v">${tok(d.tok)}</span></div>
+      <div class="t-row">Lượt<span class="v">${d.n}</span></div>`, hit));
+    hit.addEventListener('mouseleave', hideF);
+    svgH.appendChild(hit);
+  });
+  els('histLegend').innerHTML = `<span>${days.length} ngày · theo ${metric === 'cost' ? 'chi phí' : 'token'}</span>`;
+
+  const now = new Date(R.now);
+  const mStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const pmStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
+  const sumIf = f => days.filter(f).reduce((a, d) => a + d.cost, 0);
+  const active = days.filter(d => d.n);
+  const last30 = sumIf(d => d.t > today - 30 * DAY);
+  const best = days.reduce((b, d) => d.cost > b.cost ? d : b, { cost: 0, t: today });
+  els('histMinis').innerHTML = [
+    ['30 ngày qua', usd(last30)],
+    ['Tháng này', usd(sumIf(d => d.t >= mStart))],
+    ['Tháng trước', `${usd(sumIf(d => d.t >= pmStart && d.t < mStart))}${pmStart < start ? ' *' : ''}`],
+    ['TB mỗi ngày có dùng', active.length ? usd(active.reduce((a, d) => a + d.cost, 0) / active.length) : '—'],
+    ['Số ngày có dùng', `${active.length} / ${days.length}`],
+    ['Ngày cao nhất', best.cost ? `${usd(best.cost)} · ${dShort(best.t)}` : '—'],
+    ['Dự kiến tháng này', (() => {
+      const dim = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const spent = sumIf(d => d.t >= mStart);
+      return usd(spent / now.getDate() * dim);
+    })()],
+    ['Bắt đầu lưu từ', firstKey ? dShort(start) : '—']
+  ].map(([l, v]) => `<div class="mini"><div class="l">${l}</div><div class="v">${v}</div></div>`).join('');
+}
+
+/* =========================================================================
+   11. BẢNG GIÁ
+   ========================================================================= */
+function renderPrice() {
+  els('priceTotalTok').textContent = tok(D.totalTok);
+  els('pricePeriod').textContent = D.per;
+  els('priceBody').innerHTML = D.models.map(m => {
+    const unused = m.tok === 0;
+    const priceCells = ['input', 'output', 'cacheWrite5m', 'cacheWrite1h', 'cacheRead']
+      .map((k, i) => `<td class="${i === 0 ? 'sep-l' : ''}">${m.unpriced ? '—' : '$' + nf(m.price[k], 2)}</td>`).join('');
+    const useCells = unused
+      ? `<td class="sep-l">—</td><td>không sử dụng</td><td>—</td>`
+      : `<td class="sep-l">${tok(m.tok)}</td><td><b>${usd(m.cost)}</b></td><td>${pct(m.cost, D.totalCost)}</td>`;
+    return `
+      <tr class="${unused ? 'unused' : ''}">
+        <td><div class="m-cell">${iconSVG(m)}
+          <div><div class="m-title">${esc(m.name)}</div><div class="m-desc">${esc(m.desc || '')}</div>
+          ${unused ? '' : `<div class="m-share">${nf(m.share * 100, 0)}% khối lượng token · ${pct(m.cost, D.totalCost)} chi phí</div>`}</div>
+        </div></td>
+        ${priceCells}${useCells}
+      </tr>`;
+  }).join('');
+  els('priceFoot').innerHTML = `
+    <tr>
+      <td>Tổng ${D.per}</td>
+      <td colspan="5" class="note sep-l">Ghi cache 5 phút = 1,25× giá đầu vào · ghi cache 1h = 2× giá đầu vào</td>
+      <td class="sep-l">${tok(D.totalTok)}</td><td>${usd(D.totalCost)}</td><td>100%</td>
+    </tr>`;
+  els('fine').innerHTML = `
+    Chi phí = token đầu vào × giá vào + token đầu ra × giá ra + cache ghi 5 phút × giá ghi 5 phút
+    + cache ghi 1h × giá ghi 1h + cache đọc × giá đọc (đơn giá trên 1M token), tính riêng theo model của từng lượt.
+    Nếu <b>không</b> có prompt cache, ${tok(D.typeTotal.cr.tok)} token cache đọc sẽ bị tính theo giá đầu vào →
+    đội thêm <b>${usd(D.cacheSaving)}</b>, tổng lên ${usd(D.noCacheCost)} (tiết kiệm ${pct(D.cacheSaving, D.noCacheCost)}).`;
+}
+
+function renderHead() {
+  const pk = D.hourly[D.peakIdx];
+  const peak = !pk || !pk.tok ? 'chưa có dữ liệu'
+    : D.isWeek ? `ngày cao điểm ${D.labels[D.peakIdx].label} ${D.labels[D.peakIdx].date} (${tok(pk.tok)})`
+    : `giờ cao điểm ${D.labels[D.peakIdx].label} (${tok(pk.tok)})`;
+  els('mainTitle').textContent = (metric === 'cost' ? 'Chi phí theo ' : 'Token theo ') + D.unit;
+  els('mainSub').textContent   = (metric === 'cost' ? 'Cột xếp chồng theo loại token, quy ra USD · ' : 'Cột xếp chồng theo loại token · ') + peak;
+  els('cumTotal').textContent  = `${usd(D.totalCost)} · trung bình ${usd(D.meanCost)}/${D.unit}`;
+  els('cumPeriod').textContent = D.per;
+  els('pageTitle').textContent = `Token Claude Code · ${D.per} qua`;
+  document.title = SUM.window ? `${usd(SUM.window.cost)} · reset ${hhmm(SUM.window.end)} — Token Claude Code` : 'Token Claude Code';
+}
+
+/* =========================================================================
+   12. VẼ TẤT CẢ
+   ========================================================================= */
+function renderAll() {
+  if (!R) return;
+  compute();
+  renderHead(); renderWindow(); renderBudget();
+  renderKPIs(); renderBars(); renderCum(); renderSide(); renderMinis();
+  renderHeatmap(); renderAgents(); renderEffort();
+  renderSessions(); renderSessionPicker(); renderSessionDetail();
+  renderBreaks(); renderHistory(); renderPrice();
+  animate = false;
+}
+
+let loading = false;
+async function load() {
+  if (loading) return;
+  loading = true;
+  try {
+    const res = await fetch('/api/records', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status + ': ' + (await res.text()).slice(0, 200));
+    ingest(await res.json());
+    els('banner').hidden = true;
+    els('live').classList.remove('is-error');
+    els('updated').textContent = 'Cập nhật · ' + new Date(R.now).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    renderAll();
+  } catch (err) {
+    console.error(err);
+    els('live').classList.add('is-error');
+    els('updated').textContent = 'Mất kết nối';
+    const banner = els('banner');
+    banner.hidden = false;
+    banner.innerHTML = location.protocol === 'file:'
+      ? 'Trang này cần server local để đọc log. Nháy đúp <code>start.bat</code> (hoặc chạy <code>node tracker.js serve</code>) rồi mở <code>http://127.0.0.1:7788</code>.'
+      : `Không đọc được dữ liệu: ${esc(err.message)}. Kiểm tra server <code>node tracker.js serve</code> còn chạy không.`;
+  } finally {
+    loading = false;
+  }
+}
+
+/* =========================================================================
+   13. ĐIỀU KHIỂN
+   ========================================================================= */
+els('exportBtn').addEventListener('click', () => {
+  if (!R) return;
+  const head = ['Thoi diem', 'Phien', 'Project', 'Agent', 'Model', 'Effort', 'Fast', 'Input', 'Output', 'Cache ghi 5p', 'Cache ghi 1h', 'Cache doc', 'Thinking', 'Ngu canh', 'Chi phi USD'];
+  const lines = [head.join(',')].concat(D.rows.map(r => [
+    new Date(r.t).toISOString(), r.session, JSON.stringify(r.project), r.agent, r.model, r.effort, r.fast,
+    r.i, r.o, r.w5, r.w1, r.cr, r.th, r.ctx, r.c.total.toFixed(6)
+  ].join(',')));
+  const url = URL.createObjectURL(new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = `token-${D.isWeek ? '7d' : '24h'}-${A.dayKey(R.now)}.csv`; a.click();
+  URL.revokeObjectURL(url);
+});
+
+els('refreshBtn').addEventListener('click', load);
+
+document.querySelectorAll('#metricSeg button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#metricSeg button').forEach(x => x.classList.toggle('is-active', x === b));
+  metric = b.dataset.metric;
+  if (!R) return;
+  animate = true;
+  renderHead(); renderBars(); renderHeatmap(); renderHistory();
+  animate = false;
+}));
+
+document.querySelectorAll('#rangeSeg button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#rangeSeg button').forEach(x => x.classList.toggle('is-active', x === b));
+  RANGE = b.dataset.range;
+  animate = true;
+  renderAll();
+}));
+
+const THEMES = ['auto', 'light', 'dark'];
+const THEME_LABEL = { auto: 'Tự động', light: 'Sáng', dark: 'Tối' };
+function applyTheme(t) {
+  if (t === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  els('themeLabel').textContent = THEME_LABEL[t];
+  try { t === 'auto' ? localStorage.removeItem('theme') : localStorage.setItem('theme', t); } catch {}
+  if (R) renderHeatmap();
+}
+els('themeBtn').addEventListener('click', () => {
+  const cur = document.documentElement.dataset.theme || 'auto';
+  applyTheme(THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length]);
+});
+els('themeLabel').textContent = THEME_LABEL[document.documentElement.dataset.theme || 'auto'];
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (R) renderHeatmap(); });
+
+/* =========================================================================
+   14. KHỞI ĐỘNG
+   ========================================================================= */
+const qs = new URLSearchParams(location.search);
+if (qs.get('range') === '7d') document.querySelector('#rangeSeg [data-range="7d"]').click();
+if (qs.get('theme')) applyTheme(qs.get('theme'));
+load();
+setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+</script>
+</body>
+</html>

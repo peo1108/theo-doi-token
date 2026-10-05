@@ -1,0 +1,32 @@
+# Prometheus + Grafana cho dashboard token Claude Code (tuỳ chọn, cần Docker Desktop).
+#   1. Chạy server cho phép Docker truy cập:   set HOST=0.0.0.0 && node tracker.js serve
+#   2. cd monitoring && docker compose up -d
+#   3. Grafana: http://localhost:3000 (admin / admin) — datasource Prometheus đã cấu hình sẵn
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana-datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  grafana-data:
