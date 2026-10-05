@@ -14,6 +14,7 @@ Chỉ cần Node.js, không cài thêm gói nào.
 | Bảng trong terminal | `node tracker.js report` |
 | Dòng trạng thái | `node tracker.js status` |
 | Số liệu Prometheus | `node tracker.js metrics` hoặc http://127.0.0.1:7788/metrics |
+| Chạy test | `node --test "test/*.test.js"` |
 | Đổi tài khoản Claude Code | `cc-switch` (thêm thư mục dự án vào PATH) — xem [Nhiều tài khoản](#nhiều-tài-khoản) |
 
 Icon khay: xám = chưa mở cửa sổ 5 giờ · xanh = bình thường · vàng = cao hơn trung bình · đỏ = vượt ngưỡng/ngân sách.
@@ -77,15 +78,17 @@ một hồ sơ và đổi bằng cách ghi đè `claudeAiOauth` trong `.credenti
 | Đổi tài khoản | khay (bấm dòng Tài khoản) · nút **Đổi** trên dashboard · `cc-switch <tên\|email\|id>` |
 | Xem / xoá / xử lý xung đột | `cc-switch` · `cc-switch remove <tài khoản>` · `cc-switch keep` |
 
-- **Đổi khi còn phiên đang chạy**: phiên cũ vẫn giữ token cũ và có thể ghi đè lại đăng nhập khi làm mới token. Tracker
-  cảnh báo trước khi đổi; nếu bị ghi đè, dashboard hiện băng cảnh báo với hai nút: **Áp lại** (về tài khoản đã chọn)
-  hoặc **Giữ** (chấp nhận tài khoản đang trong file). Cách chắc nhất: đóng các phiên cũ rồi mới đổi; VS Code cần mở lại phiên.
-- `cc-switch` cần thư mục dự án nằm trong `PATH`. `cc-switch <tên>` khớp chính xác trước, rồi tới tiền tố (mơ hồ → mã thoát 2).
-- Thẻ Tài khoản trên dashboard hiện hạn mức 5h/tuần, hạn đăng nhập và lịch sử đổi; ngưỡng cảnh báo sửa ở "Cài đặt" (`alertLimitPct`).
+- **Đổi khi còn phiên đang chạy**: các phiên đó vẫn giữ token cũ (dùng tài khoản cũ cho tới khi mở lại) và có thể ghi
+  đè lại đăng nhập khi làm mới token. Sau khi đổi, `cc-switch` / dashboard / khay báo số phiên đang chạy. Nếu bị ghi đè,
+  dashboard hiện băng cảnh báo với hai nút: **Áp lại** (về tài khoản đã chọn) hoặc **Giữ** (chấp nhận tài khoản đang
+  trong file). Cách chắc nhất: đóng các phiên cũ rồi mới đổi; VS Code cần mở lại phiên.
+- `cc-switch` cần thư mục dự án nằm trong `PATH`. `cc-switch <tên>` khớp chính xác trước, rồi tới tiền tố (không tìm thấy hoặc mơ hồ → mã thoát 2).
+- Thẻ Tài khoản trên dashboard hiện chi phí hôm nay/tuần, hạn mức 5h/tuần và hạn đăng nhập; các lần đổi là vạch đứt trên biểu đồ. Ngưỡng cảnh báo sửa ở "Cài đặt" (`alertLimitPct`).
 - **Bảo mật**: hồ sơ chứa token đăng nhập, nằm cạnh `.credentials.json` trong `~/.claude/account-profiles/`.
   Không chia sẻ, không đồng bộ lên cloud/git thư mục này. API chỉ nhận trên loopback và không bao giờ trả token.
-- **Khôi phục tay**: `account-profiles/backup/` giữ 5 bản sao lưu gần nhất (cặp `<giờ>-credentials.json` + `<giờ>-claude.json`
-  trước mỗi lần ghi); chép đè lại hai file gốc khi đăng nhập hỏng.
+- **Khôi phục tay**: `account-profiles/backup/` giữ 5 bản sao lưu gần nhất (cặp `<dấu thời gian>-credentials.json` +
+  `<dấu thời gian>-claude.json`, trước mỗi lần ghi); chép đè lại `~/.claude/.credentials.json` và `~/.claude.json`
+  (thư mục home, không nằm trong `~/.claude`; nếu đặt `CLAUDE_CONFIG_DIR` thì là hai file trong thư mục đó).
 
 ## Monitoring chuẩn (tuỳ chọn)
 
