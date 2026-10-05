@@ -87,19 +87,24 @@ function Get-ApiErrorMessage($err) {
 }
 
 # POST /api/accounts/* (cần header X-Token-Tracker, body UTF-8), báo kết quả bằng balloon rồi làm mới.
-function Invoke-AccountAction([string]$path, $body, [string]$okTitle) {
+function Invoke-AccountAction([string]$path, $body, [string]$okTitle, [string]$failTitle) {
+  $ok = $false; $msg = ''
   try {
     $json = $body | ConvertTo-Json -Compress
     $r = Invoke-RestMethod "$Base$path" -Method Post -Headers @{ 'X-Token-Tracker' = '1' } `
       -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec 15
+    $ok = $true
     $n = @($r.running).Count
     $msg = if ($n -gt 0) { "Có $n phiên Claude Code đang chạy - cần mở lại phiên để dùng tài khoản mới" } else { 'Có hiệu lực từ phiên Claude Code kế tiếp' }
-    $tray.ShowBalloonTip(5000, $okTitle, $msg, 'Info')
   } catch {
     $msg = Get-ApiErrorMessage $_
-    $tray.ShowBalloonTip(5000, 'Không đổi được tài khoản', $msg, 'Error')
   }
-  Update-Status
+  # Balloon lỗi không được làm thay đổi kết quả của thao tác đã thành công.
+  try {
+    if ($ok) { $tray.ShowBalloonTip(5000, $okTitle, $msg, 'Info') }
+    else { $tray.ShowBalloonTip(5000, $failTitle, $msg, 'Error') }
+  } catch { }
+  try { Update-Status } catch { }
 }
 
 $Handlers = @{
@@ -108,8 +113,8 @@ $Handlers = @{
   Refresh    = { Update-Status }
   Folder     = { Start-Process explorer.exe (Join-Path $PSScriptRoot 'data') }
   AddAccount = { $tray.ShowBalloonTip(5000, 'Thêm tài khoản', 'Gõ /login trong Claude Code bằng tài khoản mới', 'Info') }
-  Switch     = { param($id, $name) Invoke-AccountAction '/api/accounts/switch' @{ id = $id } "Đã đổi sang $name" }
-  Keep       = { param($id, $name) Invoke-AccountAction '/api/accounts/keep' @{ id = $id } "Đã giữ $name" }
+  Switch     = { param($id, $name) Invoke-AccountAction '/api/accounts/switch' @{ id = $id } "Đã đổi sang $name" 'Không đổi được tài khoản' }
+  Keep       = { param($id, $name) Invoke-AccountAction '/api/accounts/keep' @{ id = $id } "Đã giữ $name" 'Không giữ được tài khoản' }
   Exit       = {
     $timer.Stop()
     $tray.Visible = $false
@@ -148,21 +153,21 @@ function Update-Status {
   } catch {
     $tray.Icon = $Icons.off
     $tray.Text = 'Server không phản hồi'
-    Update-TrayMenu $menu $null $null $Handlers
+    try { Update-TrayMenu $menu $null $null $Handlers } catch { }
   }
 }
 
-$tray.add_DoubleClick({ Start-Process $Base })
+$tray.add_DoubleClick({ try { Start-Process $Base } catch { } })
 # Bấm trái một lần cũng mở menu (NotifyIcon mặc định chỉ mở bằng chuột phải).
 $tray.add_MouseUp({
   param($sender, $e)
   if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
-    [System.Windows.Forms.NotifyIcon].GetMethod('ShowContextMenu', [Reflection.BindingFlags]'Instance,NonPublic').Invoke($tray, $null)
+    try { [System.Windows.Forms.NotifyIcon].GetMethod('ShowContextMenu', [Reflection.BindingFlags]'Instance,NonPublic').Invoke($tray, $null) } catch { }
   }
 })
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 30000
-$timer.add_Tick({ Update-Status })
+$timer.add_Tick({ try { Update-Status } catch { } })
 $timer.Start()
 
 Update-Status

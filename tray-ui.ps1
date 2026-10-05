@@ -32,7 +32,7 @@ public class TrayRenderer : ToolStripProfessionalRenderer
     static bool Inert(ToolStripItem it)
     {
         string t = TagOf(it);
-        return t == "sub" || t == "head" || t == "dim" || t == "warn" || t == "acct-on";
+        return t == "sub" || t == "head" || t == "dim" || t == "warn" || t == "acct-on" || t == "acct-dim-on";
     }
 
     static GraphicsPath Round(Rectangle r, int rad)
@@ -86,7 +86,7 @@ public class TrayRenderer : ToolStripProfessionalRenderer
     {
         string tag = TagOf(e.Item);
         Color c = Text;
-        if (tag == "sub" || tag == "dim") c = SubText;
+        if (tag == "sub" || tag == "dim" || tag.StartsWith("acct-dim")) c = SubText;
         else if (tag == "warn") c = Warn;
         e.TextColor = c;
         if (e.Item is ToolStripMenuItem && e.Text != e.Item.Text && tag.StartsWith("acct"))
@@ -195,7 +195,7 @@ function New-StatusDot([string]$hex) {
 # Dòng menu: $kind = '' | 'sub' | 'dim' | 'warn' | 'acct' | 'acct-dim' | 'head'
 function Add-TrayRow($menu, [string]$text, $image, [string]$kind, $onClick, [string]$right, [bool]$bold, [int]$height, [string]$dotHex, [int]$indent) {
   $it = New-Object System.Windows.Forms.ToolStripMenuItem
-  $it.Text = $text
+  $it.Text = $text.Replace('&', '&&')   # & là ký tự mnemonic của menu
   $it.Tag = $kind
   $it.AutoSize = $false
   $it.Size = New-Object System.Drawing.Size(300, $height)
@@ -206,7 +206,7 @@ function Add-TrayRow($menu, [string]$text, $image, [string]$kind, $onClick, [str
   if ($image) { $it.Image = $image }
   if ($right) { $it.ShortcutKeyDisplayString = $right }
   if ($bold) { $it.Font = New-Object System.Drawing.Font($menu.Font, [System.Drawing.FontStyle]::Bold) }
-  if ($onClick) { $it.add_Click($onClick) }
+  if ($onClick) { $oc = $onClick; $it.add_Click(({ try { & $oc } catch { } }).GetNewClosure()) }
   [void]$menu.Items.Add($it)
   if ($dotHex) { $menu.Renderer.Badges[$it] = New-StatusDot $dotHex }
   return $it
@@ -273,6 +273,24 @@ function Update-TrayMenu($menu, $summary, $accountsInfo, $handlers, $Theme) {
   $script:TrayLast = @{ Menu = $menu; Summary = $summary; Accounts = $accountsInfo; Handlers = $handlers; Theme = $Theme }
   if ($menu.Visible) { $script:TrayDirty = $true; return }
   $script:TrayDirty = $false
+  try { Build-TrayMenu $menu $summary $accountsInfo $handlers $Theme }
+  catch { Set-TrayFallbackMenu $menu $handlers $Theme }
+}
+
+# Menu tối thiểu (Mở dashboard + Thoát) khi dựng menu đầy đủ lỗi, để luôn còn đường thoát.
+function Set-TrayFallbackMenu($menu, $handlers, $Theme) {
+  try {
+    $theme = if ($Theme) { $Theme } else { Get-TrayTheme }
+    Clear-TrayMenu $menu
+    Set-TrayTheme $menu $theme
+    [void](Add-TrayRow $menu 'Mở dashboard' $null '' $handlers.Open '' $true 40 '' 0)
+    Add-TraySep $menu
+    [void](Add-TrayRow $menu 'Thoát' $null '' $handlers.Exit '' $false 40 '' 0)
+    Set-TrayMenuWidth $menu
+  } catch { }
+}
+
+function Build-TrayMenu($menu, $summary, $accountsInfo, $handlers, $Theme) {
   $theme = if ($Theme) { $Theme } else { Get-TrayTheme }
   Clear-TrayMenu $menu
   Set-TrayTheme $menu $theme
@@ -345,11 +363,10 @@ function Update-TrayMenu($menu, $summary, $accountsInfo, $handlers, $Theme) {
       if ($a.suggested -and -not $isActive) { $right += '   Gợi ý' }
     }
     $dot = if ($needLogin) { '#c0392b' } elseif ($isActive) { '#2f9e5a' } else { '' }
-    $kind = if ($needLogin) { 'acct-dim' } elseif ($isActive) { 'acct-on' } else { 'acct' }
+    $kind = if ($needLogin -and $isActive) { 'acct-dim-on' } elseif ($needLogin) { 'acct-dim' } elseif ($isActive) { 'acct-on' } else { 'acct' }
     $click = $null
     if (-not $isActive) { $aid = $a.id; $aname = $a.name; $click = { & $h.Switch $aid $aname }.GetNewClosure() }
     $it = Add-TrayRow $menu ([string]$a.name) $img $kind $click $right $isActive 40 $dot 0
-    if ($needLogin) { $it.Tag = 'acct-dim' }
   }
   [void](Add-TrayRow $menu 'Thêm tài khoản' (New-GlyphIcon $script:TrayGlyph.Add $glyphHex 20) '' $h.AddAccount '' $false 40 '' 0)
 
