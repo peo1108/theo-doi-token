@@ -55,11 +55,11 @@ function startLink({ hubUrl, machineToken, hub, onStatus = () => {}, backoff = {
   }
   const dropSubs = () => { for (const k of [...subs.keys()]) unsubscribe(k); };
 
-  // danh sách phiên / trạng thái đổi -> báo mọi app (gộp 500 ms)
+  // danh sách phiên / trạng thái đổi -> báo mọi app, gộp 2 giây (app sẽ gọi lại state, mà state quét thư mục lịch sử)
   let stateTimer = null;
   hub.onSessionState = () => {
     if (stateTimer) return;
-    stateTimer = setTimeout(() => { stateTimer = null; raw({ type: 'event', scope: 'user', data: { kind: 'sessions' } }); }, 500);
+    stateTimer = setTimeout(() => { stateTimer = null; raw({ type: 'event', scope: 'user', data: { kind: 'sessions' } }); }, 2000);
     stateTimer.unref?.();
   };
 

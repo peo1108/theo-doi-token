@@ -174,3 +174,18 @@ test('link: thông báo của phiên đi qua hub khi đã nối (không dùng nt
     assert.equal(hub.notifyVia, null, 'ngắt hub -> quay về cách cũ');
   } finally { link.stop(); await T.stop(); }
 });
+
+test('link: báo "danh sách phiên đổi" gộp tối đa mỗi 2 giây (app làm mới state quét đĩa trên PC)', async () => {
+  const { T, link, app } = await setup();
+  try {
+    const a = await app();
+    const s = await a.call('sessions.create', { cwd: WORK, text: 'mở' });
+    await until(() => hub.get(s.id, { load: false }).events.some((e) => e.text === 'echo: mở'));
+    await new Promise((r) => setTimeout(r, 2200));
+    a.msgs.length = 0;
+    const sess = hub.get(s.id, { load: false });
+    for (let i = 0; i < 6; i++) { sess.broadcastState(); await new Promise((r) => setTimeout(r, 250)); }
+    const n = a.msgs.filter((m) => m.type === 'event' && m.data.kind === 'sessions').length;
+    assert.ok(n <= 1, `nhận ${n} lần trong 1,5 giây`);
+  } finally { link.stop(); await T.stop(); }
+});
