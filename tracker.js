@@ -558,6 +558,15 @@ function guardPost(req) {
   return true;
 }
 
+// Chống DNS rebinding: trang web ngoài trỏ tên miền về 127.0.0.1 thì đọc được API (email, usage); khi đó Host là tên
+// miền của trang. Chỉ nhận Host là 127.0.0.1/localhost kèm đúng cổng đang nghe. Chỉ áp cho /api/* (không áp cho
+// /metrics: Prometheus trong Docker quét bằng Host khác khi HOST=0.0.0.0).
+function hostAllowed(req) {
+  const port = req.socket.localPort || PORT;
+  const h = req.headers.host;
+  return h === `127.0.0.1:${port}` || h === `localhost:${port}`;
+}
+
 // Xử lý /api/accounts*: true = đã trả lời, false = bị chặn (403), null = không phải đường dẫn tài khoản.
 async function accountsApi(req, url, json) {
   if (url.pathname === '/api/accounts' && req.method === 'GET') {
@@ -588,6 +597,9 @@ function createServer() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     try {
+      if (url.pathname.startsWith('/api/') && !hostAllowed(req)) {
+        return send(res, 403, 'application/json; charset=utf-8', JSON.stringify({ error: 'FORBIDDEN', message: 'Yêu cầu bị từ chối' }));
+      }
       if (url.pathname.startsWith('/api/accounts')) {
         const r = await accountsApi(req, url, (d) => json(res, d));
         if (r === false) return send(res, 403, 'application/json; charset=utf-8', JSON.stringify({ error: 'FORBIDDEN', message: 'Yêu cầu bị từ chối' }));

@@ -365,3 +365,40 @@ test('checkAlerts: tài khoản mới đăng nhập báo info', () => {
   const a = readAlerts().find((x) => x.level === 'info' && /user2@example\.com/.test(x.title));
   assert.ok(a, JSON.stringify(readAlerts()));
 });
+
+test('API: /api/* chỉ nhận Host là loopback đúng cổng (chống DNS rebinding); /metrics và trang tĩnh thì không kiểm tra', async () => {
+  reset();
+  writeTurns();
+  seed();
+  await withServer(async ({ call, port }) => {
+    for (const p of ['/api/accounts', '/api/records', '/api/summary', '/api/config']) {
+      const bad = await call('GET', p, { headers: { Host: `evil.example:${port}` } });
+      assert.equal(bad.status, 403, p);
+      assert.equal(bad.json().error, 'FORBIDDEN');
+      assert.equal((await call('GET', p, { headers: { Host: `127.0.0.1:${port + 1}` } })).status, 403, p);
+      assert.equal((await call('GET', p, { headers: { Host: '127.0.0.1' } })).status, 403, p);
+    }
+    assert.equal((await call('GET', '/api/accounts', { headers: { Host: `127.0.0.1:${port}` } })).status, 200);
+    assert.equal((await call('GET', '/api/accounts', { headers: { Host: `localhost:${port}` } })).status, 200);
+    assert.equal((await call('GET', '/api/accounts')).status, 200);
+    const foreign = { Host: 'tracker.docker.internal:7788' };
+    assert.equal((await call('GET', '/metrics', { headers: foreign })).status, 200);
+    assert.equal((await call('GET', '/', { headers: foreign })).status, 200);
+    assert.equal((await call('GET', '/analytics.js', { headers: foreign })).status, 200);
+  });
+});
+
+test('API: /api/accounts không lộ prev (lịch sử token của hồ sơ)', async () => {
+  reset();
+  writeTurns();
+  seed();
+  const p = acc.loadProfile('acc-1');
+  acc.saveProfile({ ...p, prev: [{ oauth: { accessToken: 'at-old', refreshToken: 'rt-old' }, organizationUuid: 'o', oauthAccount: p.oauthAccount, savedAt: 1 }] });
+  await withServer(async ({ call }) => {
+    const g = await call('GET', '/api/accounts');
+    assert.equal(g.status, 200);
+    assert.ok(!g.text.includes('prev') && !g.text.includes('rt-old') && !g.text.includes('at-old'), g.text);
+    const r = await call('GET', '/api/records');
+    assert.ok(!r.text.includes('prev') && !r.text.includes('rt-old'));
+  });
+});

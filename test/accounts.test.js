@@ -1033,3 +1033,51 @@ test('remove: đang được chọn -> ACTIVE (hồ sơ còn nguyên); không c�
     throwsCode(() => A.remove('zzz'), 'NOT_FOUND');
   });
 });
+
+test('remove: tài khoản đang có trong file đăng nhập (dù không được chọn) -> ACTIVE', () => {
+  withEnv(({ dir }) => {
+    setupRenameRemove(dir);
+    writeLoginFiles(dir, fakeAccount(2));                  // file = acc-2, đang chọn acc-1 (conflict)
+    throwsCode(() => A.remove('user2'), 'ACTIVE');
+    assert.notEqual(A.loadProfile('acc-2'), null);
+    editJSON(A.paths().credFile, (o) => { o.claudeAiOauth = 'hỏng'; });   // file lạ -> bỏ qua kiểm tra này
+    assert.deepEqual(A.remove('user2'), { id: 'acc-2' });
+  });
+});
+
+// ---------- lịch sử token của hồ sơ (prev) ----------
+
+test('profileFromLogin: đổi refreshToken -> đẩy bản cũ vào prev (mới nhất trước), giữ 3; không đổi thì không thêm', () => {
+  const acc1 = fakeAccount(1);
+  const login = (rt, extra = {}) => ({
+    id: acc1.id, org: acc1.org,
+    cred: { claudeAiOauth: { ...acc1.oauth, refreshToken: rt, ...extra } },
+    cfg: { oauthAccount: acc1.oauthAccount },
+  });
+  let p = A.profileFromLogin(login('rt-0'), null, 1000);
+  assert.equal(p.prev, undefined);
+  p = A.profileFromLogin(login('rt-0', { accessToken: 'at-new' }), p, 2000);   // refreshToken giữ nguyên
+  assert.equal(p.prev, undefined);
+  for (let n = 1; n <= 4; n++) p = A.profileFromLogin(login(`rt-${n}`), p, 2000 + n * 1000);
+  assert.deepEqual(p.prev.map((e) => e.oauth.refreshToken), ['rt-3', 'rt-2', 'rt-1']);
+  assert.equal(p.oauth.refreshToken, 'rt-4');
+  assert.equal(p.prev[0].savedAt, 5000);
+  assert.equal(p.prev[0].organizationUuid, acc1.org);
+  assert.equal(p.prev[0].oauthAccount.accountUuid, acc1.id);
+  p = A.profileFromLogin(login('rt-4', { accessToken: 'at-x' }), p, 9000);
+  assert.equal(p.prev.length, 3);
+  const text = JSON.stringify(A.publicView(p));
+  assert.ok(!text.includes('prev') && !/rt-\d/.test(text) && !/at-\d/.test(text), text);
+});
+
+test('sync: token đổi qua file -> prev lưu trong hồ sơ trên đĩa', () => {
+  withEnv(({ dir }) => {
+    writeLoginFiles(dir, fakeAccount(1));
+    A.sync(1000);
+    editJSON(A.paths().credFile, (o) => { o.claudeAiOauth.refreshToken = 'rt-1b'; });
+    A.sync(2000);
+    const p = A.loadProfile('acc-1');
+    assert.deepEqual(p.prev.map((e) => e.oauth.refreshToken), ['rt-1']);
+    assert.equal(p.prev[0].savedAt, 1000);
+  });
+});

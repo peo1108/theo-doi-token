@@ -120,6 +120,8 @@ function readLogin() {
 // Tên mặc định = phần trước @ của email.
 const defaultName = (email) => String(email || '').split('@')[0] || 'account';
 
+const PREV_KEEP = 3;
+
 // Dựng hồ sơ từ đăng nhập hiện tại; giữ name của hồ sơ cũ.
 // usage lấy từ file nếu thuộc đúng tài khoản này, ngược lại giữ usage cũ.
 function profileFromLogin(login, existing, now) {
@@ -129,6 +131,15 @@ function profileFromLogin(login, existing, now) {
   const cached = login.cfg.cachedUsageUtilization;
   const usage = isObj(cached) && cached.accountUuid === login.id ? cached : (existing?.usage ?? null);
   const email = oauthAccount.emailAddress || '';
+  // Bảo hiểm: quyền sở hữu claudeAiOauth chỉ suy ra từ oauthAccount, Claude Code có thể chỉ ghi lại .credentials.json
+  // (vd. phiên cũ làm mới token sau khi đổi) -> mỗi lần refreshToken đổi, giữ bản cũ (mới nhất trước, tối đa 3).
+  let prev = Array.isArray(existing?.prev) ? existing.prev : [];
+  if (isStr(existing?.oauth?.refreshToken) && existing.oauth.refreshToken !== oauth.refreshToken) {
+    prev = [{
+      oauth: existing.oauth, organizationUuid: existing.organizationUuid ?? null,
+      oauthAccount: existing.oauthAccount, savedAt: existing.savedAt,
+    }, ...prev].slice(0, PREV_KEEP);
+  }
   return {
     v: 1,
     id: login.id,
@@ -140,6 +151,7 @@ function profileFromLogin(login, existing, now) {
     oauthAccount,
     usage,
     savedAt: now,
+    ...(prev.length ? { prev } : {}),
   };
 }
 
@@ -667,6 +679,12 @@ function remove(query) {
     const target = resolve(query, listProfiles());
     if (target.id === chosenId(readLog())) {
       throw new AccountError('ACTIVE', `"${target.name}" đang là tài khoản được chọn`);
+    }
+    // đang nằm trong file đăng nhập (vd. conflict): xoá thì lần sync sau tạo lại bằng mục 'login', đổi ngầm tài khoản đã chọn
+    let fileId = null;
+    try { fileId = readLogin().id; } catch (e) { if (!(e instanceof AccountError && e.code === 'FORMAT')) throw e; }
+    if (fileId && target.id === fileId) {
+      throw new AccountError('ACTIVE', `"${target.name}" đang là tài khoản trong file đăng nhập`);
     }
     deleteProfile(target.id);
     return { id: target.id };

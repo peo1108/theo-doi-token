@@ -86,6 +86,12 @@ một hồ sơ và đổi bằng cách ghi đè `claudeAiOauth` trong `.credenti
 - Thẻ Tài khoản trên dashboard hiện chi phí hôm nay/tuần, hạn mức 5h/tuần và hạn đăng nhập; các lần đổi là vạch đứt trên biểu đồ. Ngưỡng cảnh báo sửa ở "Cài đặt" (`alertLimitPct`).
 - **Bảo mật**: hồ sơ chứa token đăng nhập, nằm cạnh `.credentials.json` trong `~/.claude/account-profiles/`.
   Không chia sẻ, không đồng bộ lên cloud/git thư mục này. API chỉ nhận trên loopback và không bao giờ trả token.
+- **Hồ sơ chỉ được làm mới khi tracker (khay/dashboard), statusline hoặc `cc-switch` đang chạy.** Trước khi `/login` bằng
+  tài khoản khác, hãy chạy `cc-switch` (nó đồng bộ) để lưu token mới nhất của tài khoản đang dùng. Đừng `/logout` trước khi
+  `/login` tài khoản khác: đăng xuất có thể thu hồi token đã lưu.
+- **Khôi phục token từ `prev`**: mỗi lần token của hồ sơ đổi, bản cũ được giữ trong khoá `prev` (3 bản gần nhất, mới nhất
+  trước; API không bao giờ trả). Nếu hồ sơ bị ghi đè nhầm token: chép `prev[0].oauth` đè vào `oauth` trong file hồ sơ
+  (`~/.claude/account-profiles/<id>.json`), rồi chạy `cc-switch <tên>`.
 - **Khôi phục tay**: `account-profiles/backup/` giữ 5 bản sao lưu gần nhất (cặp `<dấu thời gian>-credentials.json` +
   `<dấu thời gian>-claude.json`, trước mỗi lần ghi); chép đè lại `~/.claude/.credentials.json` và `~/.claude.json`
   (thư mục home, không nằm trong `~/.claude`; nếu đặt `CLAUDE_CONFIG_DIR` thì là hai file trong thư mục đó).
