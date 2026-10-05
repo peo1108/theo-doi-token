@@ -199,9 +199,66 @@
     return out.sort((a, b) => b.ctx - a.ctx);
   }
 
+  // ---------- nhiều tài khoản ----------
+
+  // tài khoản đang dùng tại thời điểm t; `entries` đã sắp xếp tăng dần theo t.
+  // t sớm hơn mục đầu tiên → coi như mục đầu tiên.
+  function accountAt(entries, t) {
+    if (!entries || !entries.length) return null;
+    let lo = 0, hi = entries.length - 1, found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (entries[mid].t <= t) { found = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return entries[found < 0 ? 0 : found].id;
+  }
+
+  // hạn mức hiệu dụng từ cachedUsageUtilization của Claude Code:
+  // cửa sổ đã qua mốc reset thì coi như 0%; thiếu dữ liệu (null) thì trả null.
+  function effectiveUsage(usage, now) {
+    const u = usage && usage.utilization;
+    const bucket = (b) => {
+      if (!b || b.utilization == null) return null;
+      const resetsAt = b.resets_at ? Date.parse(b.resets_at) : NaN;
+      if (Number.isNaN(resetsAt)) return { pct: b.utilization, resetsAt: null };
+      return { pct: resetsAt <= now ? 0 : b.utilization, resetsAt };
+    };
+    return {
+      fiveHour: bucket(u && u.five_hour),
+      sevenDay: bucket(u && u.seven_day),
+      fetchedAt: (usage && usage.fetchedAtMs) ?? null,
+    };
+  }
+
+  // trạng thái đăng nhập: hết hạn, sắp hết hạn (< 3 ngày), ổn, hoặc chưa biết
+  function loginState(expiresAt, now) {
+    if (expiresAt == null) return 'unknown';
+    if (expiresAt <= now) return 'expired';
+    if (expiresAt < now + 3 * DAY) return 'soon';
+    return 'ok';
+  }
+
+  // gợi ý tài khoản để chuyển sang: bỏ tài khoản đang dùng, đã hết hạn đăng nhập
+  // hoặc chưa có dữ liệu hạn mức; điểm thấp nhất thắng, hoà thì cửa sổ 5 giờ reset sớm hơn.
+  function suggestAccount(accounts, activeId, now) {
+    let best = null, bestScore = Infinity, bestReset = Infinity;
+    for (const a of accounts || []) {
+      if (a.id === activeId || loginState(a.loginExpiresAt, now) === 'expired') continue;
+      const eu = effectiveUsage(a.usage, now);
+      if (!eu.fiveHour && !eu.sevenDay) continue;
+      const score = Math.max(eu.fiveHour ? eu.fiveHour.pct : 0, eu.sevenDay ? eu.sevenDay.pct : 0);
+      const reset = eu.fiveHour && eu.fiveHour.resetsAt != null ? eu.fiveHour.resetsAt : Infinity;
+      if (score < bestScore || (score === bestScore && reset < bestReset)) {
+        best = a.id; bestScore = score; bestReset = reset;
+      }
+    }
+    return best;
+  }
+
   return {
     MIN, HOUR, DAY, WINDOW, TOKEN_KEYS, CAUSES,
     pad, floorHour, startOfDay, startOfWeek, dayKey, dayStartOfKey,
     pricing, enrich, windows, summary, chains, cacheBreaks, activeContexts,
+    accountAt, effectiveUsage, loginState, suggestAccount,
   };
 });
