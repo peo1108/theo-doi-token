@@ -258,6 +258,10 @@
   .countdown { font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
   .tline { position: relative; height: 10px; border-radius: 5px; background: var(--tile); margin: 16px 0 6px; overflow: hidden; }
   .tline i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 5px; }
+  .tline i.warn { background: var(--warn); }
+  .tline i.bad { background: var(--bad); }
+  /* vạch mảnh: thời gian đã trôi qua của cửa sổ, đặt trên thanh hạn mức */
+  .tline b { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--text); opacity: .55; }
   .tline-l { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); }
   .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; border-radius: 6px; padding: 3px 8px; }
   .status svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; }
@@ -450,7 +454,7 @@
       <div class="card-head">
         <div>
           <h2>Cửa sổ 5 giờ</h2>
-          <div class="card-sub">Ước lượng từ log: cửa sổ mở ở giờ tròn của tin nhắn đầu tiên, kéo dài 5 giờ</div>
+          <div class="card-sub" id="winSub">Ước lượng từ log: cửa sổ mở ở giờ tròn của tin nhắn đầu tiên, kéo dài 5 giờ</div>
         </div>
         <span id="winStatus"></span>
       </div>
@@ -695,6 +699,8 @@ const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max', ''];
 
 let RANGE = '24h', metric = 'token', animate = true;
 let R = null, P = null, ALL_ROWS = [], ROWS = [], CHAINS = null, BREAKS = [], SUM = null, CFG = null;
+// cửa sổ 5h: luôn của MỘT tài khoản (đang lọc, hoặc đang dùng khi xem Tất cả)
+let WSUM = null, WACC = null;
 let selectedSession = null;
 // tài khoản đang lọc: 'all' hoặc id hồ sơ (nhớ trong localStorage)
 let ACCOUNT = 'all';
@@ -820,6 +826,10 @@ function applyFilter() {
   CHAINS = A.chains(ROWS);
   BREAKS = A.cacheBreaks(CHAINS, P);
   SUM = A.summary(ROWS, R.now);
+  const wid = ACCOUNT !== 'all' ? ACCOUNT : acctInfo().active;
+  WACC = (wid && goodAccts().find(a => a.id === wid)) || null;
+  const five = WACC && WACC.usage && WACC.usage.fiveHour;
+  WSUM = A.summary(WACC ? ALL_ROWS.filter(r => r.account === WACC.id) : ALL_ROWS, R.now, { resetsAt: five ? five.resetsAt : null });
 }
 
 function ingest(data) {
@@ -949,7 +959,12 @@ function compute() {
    5. CỬA SỔ 5 GIỜ & NGÂN SÁCH
    ========================================================================= */
 function renderWindow() {
-  const s = SUM, w = s.window, now = R.now;
+  const s = WSUM, w = s.window, now = R.now;
+  const five = WACC && WACC.usage && WACC.usage.fiveHour;
+  const who = WACC ? `<b>${esc(WACC.name || WACC.id)}</b> · ` : '';
+  els('winSub').innerHTML = w && w.real
+    ? `${who}mốc reset lấy từ Anthropic${WACC.usage.fetchedAt != null ? ' · cập nhật ' + agoText(WACC.usage.fetchedAt, now) : ''}${WACC.stale ? ' · <b>số liệu cũ</b>' : ''}`
+    : `${who}ước lượng từ log: cửa sổ mở ở giờ tròn của tin nhắn đầu tiên, kéo dài 5 giờ`;
   const ratio = s.avgWindowCost ? s.projected / s.avgWindowCost : 0;
   const lim = CFG.alertWindowRatio || 2;
 
@@ -958,28 +973,52 @@ function renderWindow() {
     els('winNow').innerHTML = `<div class="card-sub">Cửa sổ mới sẽ bắt đầu khi bạn gửi tin nhắn tiếp theo.
       Trung bình mỗi cửa sổ: <b>${usd(s.avgWindowCost)}</b> · lớn nhất: <b>${usd(s.maxWindowCost)}</b></div>`;
   } else {
-    const kind = !s.avgWindowCost ? 'info' : ratio > lim ? 'bad' : ratio > 1 ? 'warn' : 'good';
-    const label = !s.avgWindowCost ? 'Chưa đủ dữ liệu so sánh'
+    const lp = CFG.alertLimitPct || 90;
+    const kind = w.real && five ? (five.pct >= lp ? 'bad' : five.pct >= 70 ? 'warn' : 'good')
+      : !s.avgWindowCost ? 'info' : ratio > lim ? 'bad' : ratio > 1 ? 'warn' : 'good';
+    const label = w.real && five ? `Đã dùng ${nf(five.pct, 0)}% hạn mức 5h`
+      : !s.avgWindowCost ? 'Chưa đủ dữ liệu so sánh'
       : ratio > lim ? `Dự kiến gấp ${nf(ratio, 1)}× trung bình`
       : ratio > 1 ? `Cao hơn TB ${nf((ratio - 1) * 100, 0)}%` : 'Trong mức bình thường';
     els('winStatus').innerHTML = statusHTML(kind, label);
     const elapsed = Math.min(1, (now - w.start) / A.WINDOW);
+    const real = w.real && five;
+    // Có % thật: ước giá của 100% từ chính cửa sổ này (chi phí / %), rồi xem với tốc độ 30 phút qua thì khi nào chạm 100%.
+    let projHTML;
+    if (real) {
+      const burn = s.burn.costPerMin;
+      const full = five.pct >= 100;
+      const capCost = five.pct > 0 ? w.cost / (five.pct / 100) : 0;
+      const hitAt = !full && capCost > 0 && burn > 0 ? now + (capCost - w.cost) / burn * MIN : null;
+      const projPct = capCost > 0 ? Math.min(999, (w.cost + burn * Math.max(0, w.end - now) / MIN) / capCost * 100) : five.pct;
+      projHTML = full
+        ? `<div class="countdown" style="color:var(--bad)">Hết</div><div class="big-sub">đã chạm giới hạn · mở lại lúc ${hhmm(w.end)}</div>`
+        : hitAt != null && hitAt < w.end
+          ? `<div class="countdown" style="color:var(--warn)">${hhmm(hitAt)}</div><div class="big-sub">dự kiến chạm 100% nếu giữ tốc độ này (còn ${dur(hitAt - now)})</div>`
+          : `<div class="countdown">~${nf(projPct, 0)}%</div><div class="big-sub">dự kiến tới lúc reset · đủ dùng với tốc độ này</div>`;
+    } else {
+      projHTML = `<div class="countdown">${usd(s.projected)}</div><div class="big-sub">dự kiến cả cửa sổ · TB ${usd(s.avgWindowCost)}</div>`;
+    }
+    const lp2 = CFG.alertLimitPct || 90;
+    const barCls = real ? (five.pct >= lp2 ? 'bad' : five.pct >= 70 ? 'warn' : '') : '';
+    const barW = real ? Math.min(100, five.pct) : elapsed * 100;
     els('winNow').innerHTML = `
       <div class="hero">
-        <div><div class="big">${usd(w.cost)}</div><div class="big-sub">${tok(w.tok)} token · ${w.n} lượt trong cửa sổ</div></div>
+        <div><div class="big">${usd(w.cost)}</div><div class="big-sub">${tok(w.tok)} token · ${w.n} lượt trong cửa sổ${w.real && five ? ` · <b>${nf(five.pct, 0)}%</b> hạn mức` : ''}</div></div>
         <div><div class="countdown">${dur(Math.max(0, w.end - now))}</div><div class="big-sub">đến khi reset lúc ${hhmm(w.end)}</div></div>
         <div><div class="countdown">${usd(s.burn.costPerMin * 60)}<span style="font-size:13px;color:var(--muted);font-weight:500">/giờ</span></div>
           <div class="big-sub">tốc độ 30 phút qua · ${tok(s.burn.tokPerMin)} token/phút</div></div>
-        <div><div class="countdown">${usd(s.projected)}</div><div class="big-sub">dự kiến cả cửa sổ · TB ${usd(s.avgWindowCost)}</div></div>
+        <div>${projHTML}</div>
       </div>
-      <div class="tline"><i style="width:${elapsed * 100}%"></i></div>
-      <div class="tline-l"><span>${hhmm(w.start)}</span><span>đã qua ${nf(elapsed * 100, 0)}%</span><span>${hhmm(w.end)}</span></div>`;
+      <div class="tline" title="${real ? 'Thanh: % hạn mức 5h đã dùng (Anthropic) · vạch: thời gian đã qua' : 'Thời gian đã qua của cửa sổ'}"><i class="${barCls}" style="width:${barW}%"></i>${real ? `<b style="left:${elapsed * 100}%"></b>` : ''}</div>
+      <div class="tline-l"><span>${hhmm(w.start)}</span><span>${real ? `đã dùng <b>${nf(five.pct, 0)}%</b> hạn mức · đã qua ${nf(elapsed * 100, 0)}% thời gian` : `đã qua ${nf(elapsed * 100, 0)}%`}</span><span>${hhmm(w.end)}</span></div>`;
   }
   renderWindowChart();
 }
 
 function renderWindowChart() {
   const svg = els('winChart'); svg.textContent = '';
+  const SUM = WSUM;   // biểu đồ theo đúng tài khoản của thẻ
   const list = SUM.windows.slice(-18);
   if (!list.length) return;
   const V = { w: 720, h: 150, l: 54, r: 10, t: 12, b: 24 };
@@ -1716,7 +1755,7 @@ function renderHead() {
   els('cumTotal').textContent  = `${usd(D.totalCost)} · trung bình ${usd(D.meanCost)}/${D.unit}`;
   els('cumPeriod').textContent = D.per;
   els('pageTitle').textContent = `Token Claude Code · ${D.per} qua` + (ACCOUNT === 'all' ? '' : ` · ${accountName(ACCOUNT)}`);
-  document.title = SUM.window ? `${usd(SUM.window.cost)} · reset ${hhmm(SUM.window.end)} — Token Claude Code` : 'Token Claude Code';
+  document.title = WSUM.window ? `${usd(WSUM.window.cost)} · reset ${hhmm(WSUM.window.end)} — Token Claude Code` : 'Token Claude Code';
 }
 
 /* =========================================================================
@@ -1801,7 +1840,8 @@ function acctRow(a, info) {
   const nameEl = editing
     ? `<input class="a-edit" data-id="${esc(a.id)}" value="${esc(RENAMING.value)}" maxlength="40" aria-label="Tên mới" ${ACCT_BUSY ? 'disabled' : ''}>`
     : `<button class="a-name" data-act="rename" data-id="${esc(a.id)}" title="Bấm để đổi tên" ${ACCT_BUSY ? 'disabled' : ''}>${esc(a.name || a.id)}</button>`;
-  const tag = isActive ? statusHTML('good', 'Đang dùng') : a.suggested ? statusHTML('info', 'Gợi ý') : '';
+  const tag = (isActive ? statusHTML('good', 'Đang dùng') : a.suggested ? statusHTML('info', 'Gợi ý') : '')
+    + (a.stale ? `<span title="Sau lần lấy hạn mức này vẫn còn dùng tài khoản — % có thể đã cao hơn. Token đã hết hạn nên chưa hỏi lại được; số sẽ cập nhật khi đổi sang tài khoản này.">${statusHTML('warn', 'Số liệu cũ')}</span>` : '');
   const u = a.usage || {};
   const sub = [a.email && esc(a.email), a.plan && esc(a.plan),
     u.fetchedAt != null ? 'cập nhật ' + agoText(u.fetchedAt, R.now) : (u.fiveHour || u.sevenDay ? '' : 'chưa có số liệu hạn mức')].filter(Boolean).join(' · ');

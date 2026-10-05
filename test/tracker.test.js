@@ -402,3 +402,75 @@ test('API: /api/accounts không lộ prev (lịch sử token của hồ sơ)', a
     assert.ok(!r.text.includes('prev') && !r.text.includes('rt-old'));
   });
 });
+
+// ---- hạn mức trực tiếp từ Anthropic ----
+
+const okFetch = (byToken, calls = []) => async (url, opts) => {
+  const tok = opts.headers.Authorization.replace('Bearer ', '');
+  calls.push(tok);
+  if (!(tok in byToken)) return { ok: false, status: 401, json: async () => ({}) };
+  return { ok: true, status: 200, json: async () => byToken[tok] };
+};
+const util = (five, seven) => ({ five_hour: { utilization: five, resets_at: new Date(Date.now() + HOUR).toISOString() },
+  seven_day: { utilization: seven, resets_at: new Date(Date.now() + 48 * HOUR).toISOString() } });
+
+test('refreshUsage: hỏi Anthropic cho từng hồ sơ còn token, bỏ token hết hạn / vừa hỏi / lỗi', async () => {
+  reset();
+  seed({ loginAs: 2 });
+  // hồ sơ acc-3 có access token đã hết hạn -> không hỏi
+  const a3 = fakeAccount(3);
+  acc.saveProfile({ ...profile(a3), oauth: { ...a3.oauth, expiresAt: Date.now() - 1 } });
+  const calls = [];
+  const r = await T.refreshUsage(Date.now(), okFetch({ 'at-1': util(100, 87), 'at-2': util(15, 2) }, calls));
+  assert.deepEqual(calls.sort(), ['at-1', 'at-2']);
+  assert.deepEqual(r.updated.sort(), ['acc-1', 'acc-2']);
+  assert.equal(acc.loadProfile('acc-1').usage.utilization.five_hour.utilization, 100);
+  assert.equal(acc.loadProfile('acc-2').usage.utilization.seven_day.utilization, 2);
+  // gọi lại ngay -> không hỏi lại (giới hạn tần suất)
+  const calls2 = [];
+  await T.refreshUsage(Date.now(), okFetch({ 'at-1': util(1, 1) }, calls2));
+  assert.deepEqual(calls2, []);
+  // lỗi mạng không ném ra ngoài
+  const r3 = await T.refreshUsage(Date.now() + 10 * 60e3, async () => { throw new Error('offline'); });
+  assert.deepEqual(r3.updated, []);
+});
+
+test('refreshUsage: tài khoản đang trong file dùng token mới nhất từ .credentials.json', async () => {
+  reset();
+  seed({ loginAs: 2 });
+  // Claude Code vừa làm mới token acc-2 trong file, hồ sơ còn token cũ
+  const a2 = fakeAccount(2);
+  writeLoginFiles(env.dir, { ...a2, oauth: { ...a2.oauth, accessToken: 'at-2-new' } });
+  const calls = [];
+  await T.refreshUsage(Date.now(), okFetch({ 'at-2-new': util(15, 2), 'at-1': util(5, 5) }, calls));
+  assert.ok(calls.includes('at-2-new'));
+  assert.ok(!calls.includes('at-2'));
+});
+
+test('accountsInfo: số liệu cũ mà sau đó còn dùng -> stale, không được gợi ý', () => {
+  reset();
+  const t0 = writeTurns();                                   // lượt của acc-1 tới t0+3h
+  const old = { fetchedAtMs: t0, accountUuid: 'acc-1', utilization: util(18, 20) };
+  const fresh = { fetchedAtMs: Date.now(), accountUuid: 'acc-2', utilization: util(50, 60) };
+  seed({ loginAs: 2, switchAt: t0 + 3.5 * HOUR, usage1: old, usage2: fresh });
+  const { rows, now } = T.analyze();
+  const info = T.accountsInfo(rows, now);
+  const a1 = info.accounts.find((a) => a.id === 'acc-1');
+  assert.equal(a1.stale, true);
+  assert.equal(a1.suggested, false);
+  assert.equal(info.accounts.find((a) => a.id === 'acc-2').stale, false);
+});
+
+test('/api/summary: cửa sổ 5h theo mốc reset thật của tài khoản đang chọn', async () => {
+  reset();
+  const t0 = writeTurns();
+  const resetsAt = Date.now() + 2 * HOUR;
+  const u2 = { fetchedAtMs: Date.now(), accountUuid: 'acc-2', utilization: {
+    five_hour: { utilization: 15, resets_at: new Date(resetsAt).toISOString() }, seven_day: null } };
+  seed({ loginAs: 2, switchAt: t0 + 2 * HOUR, usage2: u2 });
+  await withServer(async ({ call }) => {
+    const s = (await call('GET', '/api/summary')).json();
+    assert.equal(s.window.end, resetsAt);
+    assert.equal(s.window.real, true);
+  });
+});

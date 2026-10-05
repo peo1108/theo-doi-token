@@ -181,6 +181,45 @@ const accountEntries = () => safeLog().entries;
 // Cửa sổ 5h ước lượng chỉ tính các lượt của tài khoản đang chọn; ngân sách vẫn tính trên tổng.
 const windowRows = (rows, active) => (active ? rows.filter((r) => r.account === active) : rows);
 
+// Cửa sổ 5h của tài khoản đang chọn: dùng mốc reset thật (Anthropic) nếu hồ sơ có, không thì ước lượng.
+function windowSummary(rows, now, active) {
+  const p = active && accounts.loadProfile(active);
+  const five = p && A.effectiveUsage(p.usage, now).fiveHour;
+  return A.summary(windowRows(rows, active), now, { resetsAt: five ? five.resetsAt : null });
+}
+
+// ---------- hạn mức trực tiếp từ Anthropic ----------
+// Cache cachedUsageUtilization của Claude Code chỉ thỉnh thoảng mới cập nhật, nên tracker tự hỏi
+// endpoint mà /usage của Claude Code dùng, bằng access token của từng hồ sơ (chỉ đọc, không làm mới token).
+const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+const USAGE_EVERY_MS = 5 * MIN;
+const STALE_MS = 10 * MIN;
+
+async function refreshUsage(now = Date.now(), fetchImpl = globalThis.fetch) {
+  const updated = [];
+  let fileId = null, fileOauth = null;
+  try { const l = accounts.readLogin(); fileId = l.id; fileOauth = l.cred.claudeAiOauth; } catch {}
+  for (const p of accounts.listProfiles()) {
+    if (p.error) continue;
+    // tài khoản đang nằm trong file: Claude Code giữ token mới nhất ở đó
+    const oauth = p.id === fileId && fileOauth ? fileOauth : p.oauth;
+    if (!oauth || !oauth.accessToken || !(oauth.expiresAt > now + MIN)) continue;
+    if (p.usage && p.usage.fetchedAtMs > now - USAGE_EVERY_MS + 5e3) continue;
+    try {
+      const res = await fetchImpl(USAGE_URL, {
+        headers: { Authorization: `Bearer ${oauth.accessToken}`, 'anthropic-beta': 'oauth-2025-04-20' },
+        signal: AbortSignal.timeout(10e3),
+      });
+      if (!res.ok) continue;
+      const util = await res.json();
+      if (!util || (typeof util.five_hour !== 'object' && typeof util.seven_day !== 'object')) continue;
+      accounts.setUsage(p.id, util, now);
+      updated.push(p.id);
+    } catch (err) { if (err && err.name !== 'TimeoutError') console.error('usage:', p.id.slice(0, 8), err.message); }
+  }
+  return { updated };
+}
+
 // Thông tin công khai (không token) của các hồ sơ + chi phí hôm nay/tuần theo tài khoản.
 // `rows` đã qua A.enrich và có cột `account`.
 function accountsInfo(rows, now = Date.now()) {
@@ -189,7 +228,11 @@ function accountsInfo(rows, now = Date.now()) {
   let fileAccount = null;
   try { fileAccount = accounts.readLogin().id || null; } catch {}
   const views = accounts.listProfiles().map(accounts.publicView);
-  const suggestedId = A.suggestAccount(views.filter((v) => !v.error), active, now);   // dùng usage thô, trước effectiveUsage
+  // số liệu cũ: còn lượt của tài khoản đó sau lần lấy hạn mức hơn STALE_MS -> % không còn đáng tin
+  const lastTurn = {};
+  for (const r of rows) if (!(lastTurn[r.account] >= r.t)) lastTurn[r.account] = r.t;
+  const isStale = (v) => !!(v.usage && v.usage.fetchedAtMs && lastTurn[v.id] > v.usage.fetchedAtMs + STALE_MS);
+  const suggestedId = A.suggestAccount(views.filter((v) => !v.error && !isStale(v)), active, now);   // usage thô
   const day = A.startOfDay(now), week = A.startOfWeek(now);
   const today = {}, wk = {};
   for (const r of rows) {
@@ -205,6 +248,7 @@ function accountsInfo(rows, now = Date.now()) {
       costToday: today[v.id] || 0,
       costWeek: wk[v.id] || 0,
       suggested: v.id === suggestedId,
+      stale: isStale(v),
     })),
   };
 }
@@ -339,7 +383,7 @@ function checkAlerts() {
   const { rows, now, log, active } = analyze();
   const cfg = loadConfig();
   const s = A.summary(rows, now);
-  const w = A.summary(windowRows(rows, active), now);
+  const w = windowSummary(rows, now, active);
   const st = loadAlerts();
   let dirty = false;
 
@@ -463,7 +507,7 @@ function statusLine() {
   const { rows, now, P, active } = analyze();
   const cfg = loadConfig();
   const s = A.summary(rows, now);
-  const w = A.summary(windowRows(rows, active), now);
+  const w = windowSummary(rows, now, active);
   const parts = [];
   if (w.window) parts.push(`5h ${usd(w.window.cost)} · reset ${hhmm(w.window.end)}`);
   parts.push(`hôm nay ${usd(s.today)}${cfg.budgetDay > 0 ? `/${usd(cfg.budgetDay)}` : ''}`);
@@ -623,12 +667,12 @@ function createServer() {
       if (url.pathname === '/api/summary') {
         const { rows, now, active } = analyze();
         const s = A.summary(rows, now);
-        const w = A.summary(windowRows(rows, active), now);   // cửa sổ 5h của tài khoản đang chọn
+        const w = windowSummary(rows, now, active);   // cửa sổ 5h của tài khoản đang chọn
         const info = accountsInfo(rows, now);
         const cur = info.accounts.find((a) => a.id === info.active);
         return json(res, {
           today: s.today, week: s.week, d24: s.d24, tok24: s.tok24,
-          window: w.window && { cost: w.window.cost, end: w.window.end }, projected: w.projected,
+          window: w.window && { cost: w.window.cost, end: w.window.end, real: !!w.window.real }, projected: w.projected,
           avgWindowCost: w.avgWindowCost,
           text: `5h ${w.window ? `${usd(w.window.cost)} (reset ${hhmm(w.window.end)})` : '—'} · hôm nay ${usd(s.today)} · 24h ${fmt(s.tok24)} token`,
           account: cur ? { name: cur.name, fiveHour: cur.usage.fiveHour, sevenDay: cur.usage.sevenDay } : null,
@@ -667,13 +711,15 @@ function serve() {
 
   server.listen(PORT, HOST, () => {
     console.log(`Dashboard: http://127.0.0.1:${PORT}  ·  Prometheus: /metrics  (Ctrl+C để dừng)`);
-    const tick = () => { try { checkAlerts(); } catch (err) { console.error('checkAlerts:', err.message); } };
+    const tick = () => { try { checkAlerts(); } catch (err) { console.error('checkAlerts:', err.message); }
+      refreshUsage().catch((err) => console.error('usage:', err.message));   // tự giới hạn 5 phút/tài khoản
+    };
     tick();
     setInterval(tick, ALERT_EVERY_MS);
   });
 }
 
-module.exports = { scan, analyze, records, accountsInfo, checkAlerts, createServer };
+module.exports = { scan, analyze, records, accountsInfo, checkAlerts, createServer, refreshUsage };
 
 if (require.main === module) {
   const cmd = process.argv[2] || 'report';

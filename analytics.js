@@ -115,7 +115,29 @@
     return out;
   }
 
-  function summary(rows, now) {
+  // Cửa sổ thật do Anthropic báo (resets_at): [resetsAt - 5h, resetsAt). Lượt trước đó vẫn chia
+  // cửa sổ theo cách ước lượng để có lịch sử so sánh.
+  function realWindows(rows, resetsAt) {
+    const start = resetsAt - WINDOW;
+    const before = rows.filter((r) => r.t < start);
+    const cur = { start, end: resetsAt, n: 0, tok: 0, cost: 0, first: null, last: null, real: true };
+    for (const r of rows) {
+      if (r.t < start || r.t >= resetsAt) continue;
+      cur.n++; cur.tok += r.tok; cur.cost += r.c.total;
+      if (cur.first == null) cur.first = r.t;
+      cur.last = r.t;
+    }
+    const ws = windows(before);
+    // cửa sổ ước lượng cuối có thể chồm qua mốc mở cửa sổ thật -> cắt lại
+    const last = ws[ws.length - 1];
+    if (last && last.end > start) last.end = start;
+    ws.push(cur);
+    return ws;
+  }
+
+  // opts.resetsAt (ms, tuỳ chọn): mốc reset 5h thật của tài khoản; còn hiệu lực thì dùng thay ước lượng.
+  function summary(rows, now, opts) {
+    const resetsAt = opts && opts.resetsAt;
     const dayStart = startOfDay(now), weekStart = startOfWeek(now);
     const s = { now, today: 0, todayTok: 0, week: 0, d24: 0, tok24: 0, n24: 0 };
     let bc = 0, bt = 0, crH = 0, baseH = 0, nH = 0;
@@ -126,7 +148,7 @@
       if (r.t >= now - 30 * MIN) { bc += r.c.total; bt += r.tok; }
       if (r.t >= now - HOUR) { crH += r.cr; baseH += r.ctx; nH++; }
     }
-    const ws = windows(rows);
+    const ws = resetsAt > now ? realWindows(rows, resetsAt) : windows(rows);
     const last = ws[ws.length - 1];
     const active = last && now < last.end ? last : null;
     const past = ws.filter((w) => w !== active && w.n >= 5);
@@ -240,13 +262,23 @@
 
   // gợi ý tài khoản để chuyển sang: bỏ tài khoản đang dùng, đã hết hạn đăng nhập
   // hoặc chưa có dữ liệu hạn mức; điểm thấp nhất thắng, hoà thì cửa sổ 5 giờ reset sớm hơn.
+  // điểm = % cao nhất trong 5h/tuần (đã tính reset); null nếu không có số liệu
+  function usageScore(usage, now) {
+    const eu = effectiveUsage(usage, now);
+    if (!eu.fiveHour && !eu.sevenDay) return null;
+    return Math.max(eu.fiveHour ? eu.fiveHour.pct : 0, eu.sevenDay ? eu.sevenDay.pct : 0);
+  }
+
+  // Chỉ gợi ý tài khoản chưa chạm 100% và còn nhiều hạn mức hơn tài khoản đang dùng.
   function suggestAccount(accounts, activeId, now) {
+    const act = (accounts || []).find((a) => a.id === activeId);
+    const actScore = act ? usageScore(act.usage, now) : null;
     let best = null, bestScore = Infinity, bestReset = Infinity;
     for (const a of accounts || []) {
       if (a.id === activeId || loginState(a.loginExpiresAt, now) === 'expired') continue;
+      const score = usageScore(a.usage, now);
+      if (score == null || score >= 100 || (actScore != null && score >= actScore)) continue;
       const eu = effectiveUsage(a.usage, now);
-      if (!eu.fiveHour && !eu.sevenDay) continue;
-      const score = Math.max(eu.fiveHour ? eu.fiveHour.pct : 0, eu.sevenDay ? eu.sevenDay.pct : 0);
       const reset = eu.fiveHour && eu.fiveHour.resetsAt != null ? eu.fiveHour.resetsAt : Infinity;
       if (score < bestScore || (score === bestScore && reset < bestReset)) {
         best = a.id; bestScore = score; bestReset = reset;

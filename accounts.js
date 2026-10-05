@@ -129,7 +129,10 @@ function profileFromLogin(login, existing, now) {
   const oauth = login.cred.claudeAiOauth;
   const oauthAccount = login.cfg.oauthAccount;
   const cached = login.cfg.cachedUsageUtilization;
-  const usage = isObj(cached) && cached.accountUuid === login.id ? cached : (existing?.usage ?? null);
+  // cache của Claude Code chỉ thay usage đã lưu khi nó mới hơn (tracker có thể vừa hỏi thẳng Anthropic)
+  const old = existing?.usage ?? null;
+  const usage = isObj(cached) && cached.accountUuid === login.id && !((old?.fetchedAtMs || 0) > (cached.fetchedAtMs || 0))
+    ? cached : old;
   const email = oauthAccount.emailAddress || '';
   // Bảo hiểm: quyền sở hữu claudeAiOauth chỉ suy ra từ oauthAccount, Claude Code có thể chỉ ghi lại .credentials.json
   // (vd. phiên cũ làm mới token sau khi đổi) -> mỗi lần refreshToken đổi, giữ bản cũ (mới nhất trước, tối đa 3).
@@ -173,6 +176,14 @@ function loadProfile(id) {
 
 function saveProfile(p) {
   writeAtomic(profileFile(p.id), JSON.stringify(p, null, 2));
+}
+// Ghi hạn mức vừa hỏi thẳng Anthropic vào hồ sơ (cùng dạng cachedUsageUtilization). Không đụng token.
+function setUsage(id, utilization, now = Date.now()) {
+  const p = loadProfile(id);
+  if (!p) throw new AccountError('NOT_FOUND', `Không tìm thấy hồ sơ ${id}`);
+  p.usage = { fetchedAtMs: now, accountUuid: id, utilization };
+  saveProfile(p);
+  return p;
 }
 
 function deleteProfile(id) {
@@ -698,7 +709,7 @@ module.exports = {
   withLock, isLocked, publicView,
   readLog, writeLog, addEntry, chosenId,
   isClaudeCodeProcess, findClaudeProcesses, parseWindowsProcesses, parsePsProcesses,
-  snapshot, switchTo, sync, keep, rename, remove,
+  snapshot, switchTo, sync, keep, rename, remove, setUsage,
 };
 
 // ---------- dòng lệnh: cc-switch ----------

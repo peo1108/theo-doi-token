@@ -1081,3 +1081,36 @@ test('sync: token đổi qua file -> prev lưu trong hồ sơ trên đĩa', () =
     assert.equal(p.prev[0].savedAt, 1000);
   });
 });
+
+// ---- hạn mức lấy trực tiếp từ Anthropic ----
+
+test('setUsage: ghi usage mới, giữ nguyên token, không thêm prev', () => {
+  const env = makeEnv();
+  try {
+    const a = fakeAccount(1);
+    writeLoginFiles(env.dir, a);
+    A.sync(1000);
+    const util = { five_hour: { utilization: 100, resets_at: '2026-10-05T12:19:59Z' }, seven_day: null };
+    const p = A.setUsage('acc-1', util, 5000);
+    assert.equal(p.usage.fetchedAtMs, 5000);
+    assert.equal(p.usage.accountUuid, 'acc-1');
+    assert.deepEqual(p.usage.utilization, util);
+    const saved = A.loadProfile('acc-1');
+    assert.equal(saved.oauth.refreshToken, 'rt-1');
+    assert.equal(saved.prev, undefined);
+    assert.throws(() => A.setUsage('nope', util, 1), (e) => e.code === 'NOT_FOUND');
+  } finally { env.cleanup(); }
+});
+
+test('profileFromLogin: cache cũ của Claude Code không ghi đè usage mới hơn', () => {
+  const env = makeEnv();
+  try {
+    const a = fakeAccount(1);
+    writeLoginFiles(env.dir, a, { usage: true });            // cache fetchedAtMs = 1.9e12
+    const login = A.readLogin();
+    const fresher = { fetchedAtMs: 1.95e12, accountUuid: 'acc-1', utilization: { five_hour: { utilization: 99 } } };
+    assert.equal(A.profileFromLogin(login, { name: 'x', usage: fresher }, 1).usage, fresher);
+    const older = { fetchedAtMs: 1.8e12, accountUuid: 'acc-1', utilization: {} };
+    assert.equal(A.profileFromLogin(login, { name: 'x', usage: older }, 1).usage.fetchedAtMs, 1.9e12);
+  } finally { env.cleanup(); }
+});
