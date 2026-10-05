@@ -398,6 +398,7 @@ function checkAlerts() {
     st.recent = st.recent.slice(0, 40);
     dirty = true;
     if (cfg.notify) notifyWindows(title, body);
+    if (hubLink && hubLink.online()) hubLink.notify({ key, level, title, body });   // đẩy lên điện thoại qua hub (key ổn định -> hub bỏ trùng)
   };
 
   const today = A.dayKey(now), week = A.dayKey(A.startOfWeek(now));

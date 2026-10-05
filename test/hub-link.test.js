@@ -157,3 +157,20 @@ test('link: tin lớn (~1,2 MB) từ app tới PC và trả lời lớn về app
     assert.equal(got.data.text.length, text.trim().length);
   } finally { link.stop(); await T.stop(); }
 });
+
+test('link: thông báo của phiên đi qua hub khi đã nối (không dùng ntfy riêng của máy)', async () => {
+  const calls = [];
+  const { createNotifier } = require('../hub/notify.js');
+  const T = await startHub({ notifier: (db) => createNotifier({ db, fetch: async (url, o) => { calls.push({ url, ...o }); return { ok: true }; } }) });
+  await T.h.cli(['init', 'cam', 'mat-khau-cam']);
+  const pair = (await T.post('/v1/machines/pair', { username: 'cam', password: 'mat-khau-cam', machineName: 'pc' })).body;
+  const link = startLink({ hubUrl: T.base, machineToken: pair.machineToken, hub, backoff: FAST });
+  try {
+    await until(() => link.status().state === 'online');
+    assert.equal(await hub.notify('Xong · demo', 'đã sửa', '11111111-2222-3333-4444-555555555555'), true);
+    await until(() => calls.length === 1);
+    assert.equal(calls[0].headers.Click, `ccremote://session/${pair.machineId}/11111111-2222-3333-4444-555555555555`);
+    link.stop();
+    assert.equal(hub.notifyVia, null, 'ngắt hub -> quay về cách cũ');
+  } finally { link.stop(); await T.stop(); }
+});

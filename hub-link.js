@@ -119,6 +119,10 @@ function startLink({ hubUrl, machineToken, hub, onStatus = () => {}, backoff = {
     retryTimer.unref?.();
   }
 
+  // thông báo của phiên (xin quyền, xong lượt...) đi qua hub khi đã nối; mỗi sự kiện là một thông báo riêng
+  hub.notifyVia = (title, body, sid) => st.state === 'online'
+    && raw({ type: 'notify', key: `s:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`, level: 'info', title, body: body || '', session: sid || '' });
+
   const sweepTimer = setInterval(() => asm.sweep(), 30e3);
   sweepTimer.unref?.();
   connect();
@@ -134,6 +138,7 @@ function startLink({ hubUrl, machineToken, hub, onStatus = () => {}, backoff = {
       clearInterval(sweepTimer);
       clearTimeout(stateTimer);
       if (hub.onSessionState) hub.onSessionState = null;
+      hub.notifyVia = null;
       dropSubs();
       try { ws && ws.close(); } catch {}
       setState('off');

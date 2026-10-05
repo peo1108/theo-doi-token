@@ -268,3 +268,63 @@ test('hub hàm riêng + thu hồi: thiết bị, máy, đổi mật khẩu, đă
     assert.equal(await U.appA.closed, 4001);
   } finally { await T.stop(); }
 });
+
+// ---------- Task 8: thông báo ----------
+
+const { createNotifier } = require('../hub/notify.js');
+
+function fakeFetch() {
+  const calls = [];
+  const f = async (url, opts) => { calls.push({ url, ...opts }); return { ok: true }; };
+  f.calls = calls;
+  return f;
+}
+
+test('notify: app đang mở thì không đẩy; trùng key trong 24 giờ chỉ một lần; tối đa 30 / giờ; topic riêng mỗi người', async () => {
+  const db = openDb(path.join(tmp(), 'hub.db'));
+  const a = db.createUser({ username: 'cam', passHash: 'x' });
+  const b = db.createUser({ username: 'bob', passHash: 'x' });
+  let t = Date.now();
+  const f = fakeFetch();
+  const N = createNotifier({ db, fetch: f, now: () => t });
+  const n = (key) => ({ key, level: 'warning', title: 'Cần duyệt Bash · dự án', body: 'npm test', machine: 'm1', session: 's1' });
+  assert.equal(await N.send(a.id, n('k1'), [{ foreground: true }]), false, 'app đang mở');
+  assert.equal(await N.send(a.id, n('k1'), [{ foreground: false }]), true);
+  assert.equal(await N.send(a.id, n('k1'), []), false, 'trùng key');
+  t += 25 * HOUR;
+  assert.equal(await N.send(a.id, n('k1'), []), true, 'sau 24 giờ báo lại');
+  const c = f.calls[0];
+  assert.equal(c.url, `https://ntfy.sh/${db.ntfyTopic(a.id)}`);
+  assert.equal(c.method, 'POST');
+  assert.equal(c.body, 'npm test');
+  assert.match(c.headers.Title, /^=\?UTF-8\?B\?/, 'tiêu đề có dấu được mã hoá');
+  assert.equal(Buffer.from(c.headers.Title.slice(10, -2), 'base64').toString(), 'Cần duyệt Bash · dự án');
+  assert.equal(c.headers.Click, 'ccremote://session/m1/s1');
+  // trần 30 / giờ / người
+  t += 2 * HOUR;
+  let sent = 0;
+  for (let i = 0; i < 31; i++) if (await N.send(a.id, n(`r${i}`), [])) sent++;
+  assert.equal(sent, 30);
+  assert.equal(await N.send(b.id, n('r0'), []), true, 'người khác không bị tính chung');
+  assert.notEqual(f.calls.at(-1).url, c.url);
+  db.close();
+});
+
+test('notify qua hub: agent gửi notify -> hub đẩy ntfy kèm đúng máy', async () => {
+  const f = fakeFetch();
+  const T = await startHub({ notifier: (db) => createNotifier({ db, fetch: f }) });
+  try {
+    const U = await twoUsers(T);
+    U.agentA.send({ type: 'notify', key: 'xong-1', level: 'info', title: 'Xong · demo', body: 'đã sửa xong', session: 's9' });
+    const t0 = Date.now();
+    while (!f.calls.length && Date.now() - t0 < 2000) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0].headers.Click, `ccremote://session/${U.mA}/s9`);
+    // app báo đang mở -> không đẩy
+    U.appA.send({ type: 'presence', foreground: true });
+    await new Promise((r) => setTimeout(r, 50));
+    U.agentA.send({ type: 'notify', key: 'xong-2', title: 'Xong', body: 'x' });
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(f.calls.length, 1);
+  } finally { await T.stop(); }
+});

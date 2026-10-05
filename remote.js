@@ -1203,7 +1203,12 @@ function createHub(ctx = {}) {
     defaults() {
       return new Session('00000000-0000-0000-0000-000000000000', { hub }).effective();
     },
-    notify: (title, body, sid) => (ctx.notify || notify)(title, body, sid),
+    // đang nối hub (hub-link đặt notifyVia) -> hub gửi ntfy cho đúng người; không thì ntfy riêng của máy (đường cũ)
+    notifyVia: null,
+    notify: async (title, body, sid) => {
+      if (hub.notifyVia && hub.notifyVia(title, body, sid)) return true;
+      return (ctx.notify || notify)(title, body, sid);
+    },
     // Phiên trên máy vừa gọi hook: tạo/cập nhật cầu nối.
     bridgeFor(b) {
       const id = String(b.session_id || '').toLowerCase();
