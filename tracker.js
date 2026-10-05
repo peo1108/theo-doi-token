@@ -12,9 +12,10 @@ const path = require('path');
 const http = require('http');
 const { spawn } = require('child_process');
 const A = require('./analytics.js');
+const accounts = require('./accounts.js');
 
 const LOG_ROOT = process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects');
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = process.env.TT_DATA_DIR || path.join(__dirname, 'data');
 const STORE_FILE = path.join(DATA_DIR, 'usage.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const ALERTS_FILE = path.join(DATA_DIR, 'alerts.json');
@@ -24,7 +25,7 @@ const HOST = process.env.HOST || '127.0.0.1';   // đặt HOST=0.0.0.0 nếu Pro
 const { MIN, HOUR, DAY } = A;
 const KEEP_MS = 7 * DAY;
 const HISTORY_DAYS = 90;
-const STORE_VERSION = 4;
+const STORE_VERSION = 5;
 const ALERT_EVERY_MS = 60e3;
 
 const DEFAULT_CONFIG = {
@@ -34,6 +35,7 @@ const DEFAULT_CONFIG = {
   alertCacheHit: 80,     // % cache hit trong 1 giờ qua thấp hơn mức này thì báo
   alertContext: 400000,  // token ngữ cảnh của một phiên đang chạy vượt mức này thì báo
   alertWindowRatio: 2,   // cửa sổ 5h dự kiến vượt N lần trung bình thì báo
+  alertLimitPct: 90,     // % hạn mức 5h/tuần của tài khoản đang dùng từ mức này thì báo, 0 = tắt
 };
 
 // ---------- file JSON ----------
@@ -131,15 +133,15 @@ function parseFile(file, onRecord) {
 
 // ---------- tổng hợp theo ngày (giữ 90 ngày) ----------
 
-function addDaily(daily, rec) {
+function addDaily(daily, rec, entries) {
   const day = (daily[A.dayKey(rec.t)] ||= {});
-  const a = (day[rec.m + (rec.fs ? '|fast' : '')] ||= { i: 0, o: 0, w5: 0, w1: 0, cr: 0, th: 0, n: 0 });
+  const a = (day[`${A.accountAt(entries, rec.t) || ''}|${rec.m}${rec.fs ? '|fast' : ''}`] ||= { i: 0, o: 0, w5: 0, w1: 0, cr: 0, th: 0, n: 0 });
   a.i += rec.i; a.o += rec.o; a.w5 += Math.max(0, rec.cw - rec.w1); a.w1 += rec.w1;
   a.cr += rec.cr; a.th += rec.th; a.n += 1;
 }
 
 // Lần đầu (hoặc khi lâu không chạy): đọc toàn bộ log còn trên máy để lấp lịch sử các ngày cũ.
-function backfill(store, now) {
+function backfill(store, now, entries) {
   const cutoff = now - KEEP_MS;
   const since = now - HISTORY_DAYS * DAY;
   const seen = {};
@@ -150,11 +152,50 @@ function backfill(store, now) {
     parseFile(file, (id, rec) => { if (rec.t >= since) seen[id] = mergeMsg(seen[id], rec); });
   }
   const tmp = {};
-  for (const rec of Object.values(seen)) addDaily(tmp, rec);
+  for (const rec of Object.values(seen)) addDaily(tmp, rec, entries);
   for (const [k, v] of Object.entries(tmp)) {
     if (A.dayStartOfKey(k) < cutoff && !store.daily[k]) store.daily[k] = v;
   }
   store.backfilledAt = now;
+}
+
+// ---------- tài khoản ----------
+
+// Đọc dòng thời gian; file hỏng thì coi như chưa có (không làm hỏng việc quét log).
+function safeLog() {
+  try { return accounts.readLog(); } catch (err) { console.error('account-log:', err.message); return { v: 1, entries: [], conflict: null }; }
+}
+const accountEntries = () => safeLog().entries;
+
+// Cửa sổ 5h ước lượng chỉ tính các lượt của tài khoản đang chọn; ngân sách vẫn tính trên tổng.
+const windowRows = (rows, active) => (active ? rows.filter((r) => r.account === active) : rows);
+
+// Thông tin công khai (không token) của các hồ sơ + chi phí hôm nay/tuần theo tài khoản.
+// `rows` đã qua A.enrich và có cột `account`.
+function accountsInfo(rows, now = Date.now()) {
+  const log = safeLog();
+  const active = accounts.chosenId(log);
+  let fileAccount = null;
+  try { fileAccount = accounts.readLogin().id || null; } catch {}
+  const views = accounts.listProfiles().map(accounts.publicView);
+  const suggestedId = A.suggestAccount(views.filter((v) => !v.error), active, now);   // dùng usage thô, trước effectiveUsage
+  const day = A.startOfDay(now), week = A.startOfWeek(now);
+  const today = {}, wk = {};
+  for (const r of rows) {
+    if (r.t >= week) wk[r.account] = (wk[r.account] || 0) + r.c.total;
+    if (r.t >= day) today[r.account] = (today[r.account] || 0) + r.c.total;
+  }
+  return {
+    active, fileAccount, conflict: log.conflict,
+    accounts: views.map((v) => ({
+      ...v,
+      usage: A.effectiveUsage(v.usage, now),
+      loginState: A.loginState(v.loginExpiresAt, now),
+      costToday: today[v.id] || 0,
+      costWeek: wk[v.id] || 0,
+      suggested: v.id === suggestedId,
+    })),
+  };
 }
 
 // ---------- quét ----------
@@ -162,13 +203,18 @@ function backfill(store, now) {
 function scan() {
   const now = Date.now();
   const cutoff = now - KEEP_MS;
+  try { accounts.sync(now); } catch (err) { console.error('accounts.sync:', err.message); }   // lỗi tài khoản không chặn quét log
+  const entries = accountEntries();
   const store = loadStore();
   let changed = false;
 
   if (!store.backfilledAt || now - store.lastScan > 6 * DAY) {
-    backfill(store, now);
+    backfill(store, now, entries);
     changed = true;
   }
+  // dòng thời gian tài khoản đổi (đổi/giữ/đăng nhập mới) -> gán lại tài khoản cho các ngày chi tiết
+  const sig = JSON.stringify(entries.map((e) => [e.t, e.id]));
+  if (store.acctSig !== sig) { store.acctSig = sig; changed = true; }
 
   for (const file of walk(LOG_ROOT)) {
     let st;
@@ -195,7 +241,7 @@ function scan() {
       if (start >= cutoff || start < now - HISTORY_DAYS * DAY) delete store.daily[k];
     }
     for (const rec of Object.values(store.msgs)) {
-      if (A.startOfDay(rec.t) >= cutoff) addDaily(store.daily, rec);
+      if (A.startOfDay(rec.t) >= cutoff) addDaily(store.daily, rec, entries);
     }
     store.lastScan = now;
     writeJSON(STORE_FILE, store);
@@ -203,25 +249,27 @@ function scan() {
   return store;
 }
 
-const toRow = (r) => ({
-  t: r.t, model: r.m, project: r.p, session: r.sid, agent: r.ag, chain: r.ch, effort: r.ef, fast: r.fs,
+const toRow = (r, entries) => ({
+  t: r.t, model: r.m, project: r.p, session: r.sid, agent: r.ag, chain: r.ch, effort: r.ef,
+  account: A.accountAt(entries, r.t) || '', fast: r.fs,
   i: r.i, o: r.o, w5: Math.max(0, r.cw - r.w1), w1: r.w1, cr: r.cr, th: r.th,
 });
 
 function analyze() {
   const store = scan();
   const P = loadPricing();
-  const rows = A.enrich(Object.values(store.msgs).map(toRow), P);
-  return { store, P, rows, now: Date.now() };
+  const log = safeLog();
+  const rows = A.enrich(Object.values(store.msgs).map((r) => toRow(r, log.entries)), P);
+  return { store, P, rows, now: Date.now(), log, active: accounts.chosenId(log) };
 }
 
 // ---------- API cho dashboard ----------
 
-const ROW_COLS = ['t', 'model', 'project', 'session', 'agent', 'chain', 'effort', 'fast', 'i', 'o', 'w5', 'w1', 'cr', 'th'];
-const INDEXED = ['model', 'project', 'session', 'agent', 'chain', 'effort'];
+const ROW_COLS = ['t', 'model', 'project', 'session', 'agent', 'chain', 'effort', 'account', 'fast', 'i', 'o', 'w5', 'w1', 'cr', 'th'];
+const INDEXED = ['model', 'project', 'session', 'agent', 'chain', 'effort', 'account'];
 
 // Dữ liệu thô gọn: mỗi lượt là 1 mảng số, các cột chữ được đánh chỉ mục để JSON nhỏ.
-function records(store) {
+function records(store = scan()) {
   const lists = {}, maps = {};
   for (const k of INDEXED) { lists[k] = []; maps[k] = new Map(); }
   const idx = (k, v) => {
@@ -229,14 +277,12 @@ function records(store) {
     if (i === undefined) { i = lists[k].push(v) - 1; maps[k].set(v, i); }
     return i;
   };
-  const rows = Object.values(store.msgs)
-    .sort((a, b) => a.t - b.t)
-    .map((rec) => {
-      const r = toRow(rec);
-      return ROW_COLS.map((c) => (INDEXED.includes(c) ? idx(c, r[c]) : r[c]));
-    });
+  const now = Date.now();
+  const log = safeLog();
+  const enriched = A.enrich(Object.values(store.msgs).map((rec) => toRow(rec, log.entries)), loadPricing());
+  const rows = enriched.map((r) => ROW_COLS.map((c) => (INDEXED.includes(c) ? idx(c, r[c]) : r[c])));
   return {
-    now: Date.now(),
+    now,
     keepDays: KEEP_MS / DAY,
     cols: ROW_COLS,
     lists,
@@ -245,6 +291,8 @@ function records(store) {
     meta: readJSON(MODELS_FILE, { models: [] }),
     config: loadConfig(),
     alerts: loadAlerts().recent,
+    accounts: accountsInfo(enriched, now),
+    accountLog: log.entries,
   };
 }
 
@@ -277,9 +325,10 @@ const fmt = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? (n / 1e6).
 const hhmm = (t) => { const d = new Date(t); return `${A.pad(d.getHours())}:${A.pad(d.getMinutes())}`; };
 
 function checkAlerts() {
-  const { rows, now } = analyze();
+  const { rows, now, log, active } = analyze();
   const cfg = loadConfig();
   const s = A.summary(rows, now);
+  const w = A.summary(windowRows(rows, active), now);
   const st = loadAlerts();
   let dirty = false;
 
@@ -301,9 +350,42 @@ function checkAlerts() {
   budget('ngày', s.today, cfg.budgetDay, `day:${today}:`);
   budget('tuần', s.week, cfg.budgetWeek, `week:${week}:`);
 
-  if (s.window && s.avgWindowCost > 0 && s.window.n >= 10 && s.projected > cfg.alertWindowRatio * s.avgWindowCost) {
-    push(`burn:${s.window.start}`, 'warning', 'Cửa sổ 5 giờ đang dùng nhanh',
-      `Dự kiến ${usd(s.projected)} đến ${hhmm(s.window.end)}, gấp ${(s.projected / s.avgWindowCost).toFixed(1)} lần trung bình`);
+  if (w.window && w.avgWindowCost > 0 && w.window.n >= 10 && w.projected > cfg.alertWindowRatio * w.avgWindowCost) {
+    push(`burn:${w.window.start}`, 'warning', 'Cửa sổ 5 giờ đang dùng nhanh',
+      `Dự kiến ${usd(w.projected)} đến ${hhmm(w.window.end)}, gấp ${(w.projected / w.avgWindowCost).toFixed(1)} lần trung bình`);
+  }
+
+  // tài khoản: conflict, tài khoản mới, gần hết hạn mức, hạn đăng nhập
+  const info = accountsInfo(rows, now);
+  const nameOf = (id) => (info.accounts.find((a) => a.id === id) || {}).name || id;
+  const cf = log.conflict;
+  if (cf) {
+    push(`conflict:${cf.since}`, 'warning', `Đăng nhập hiện là ${nameOf(cf.fileId)} nhưng bạn đang chọn ${nameOf(cf.chosenId)}`,
+      'Phiên cũ ghi đè hoặc vừa /login — mở dashboard để xử lý');
+  }
+  for (const e of log.entries) {
+    if (e.reason !== 'login' || e.t < now - 10 * MIN) continue;
+    const a = info.accounts.find((x) => x.id === e.id);
+    push(`newacct:${e.id}:${e.t}`, 'info', `Đã thêm tài khoản ${a ? a.email || a.name : e.id}`,
+      'Hồ sơ đã được lưu — dùng cc-switch hoặc dashboard để đổi giữa các tài khoản');
+  }
+  const cur = info.accounts.find((a) => a.id === info.active);
+  if (cfg.alertLimitPct > 0 && cur) {
+    const best = info.accounts.find((a) => a.suggested);
+    const pctOf = (a) => Math.max(a.usage.fiveHour ? a.usage.fiveHour.pct : 0, a.usage.sevenDay ? a.usage.sevenDay.pct : 0);
+    const ago = (ms) => (ms < HOUR ? `${Math.max(1, Math.round(ms / MIN))} phút` : ms < DAY ? `${Math.round(ms / HOUR)} giờ` : `${Math.round(ms / DAY)} ngày`);
+    for (const [win, label, u] of [['5h', '5h', cur.usage.fiveHour], ['7d', '7 ngày', cur.usage.sevenDay]]) {
+      if (!u || u.pct < cfg.alertLimitPct) continue;
+      const hint = best
+        ? `Gợi ý: ${best.name} (đang ${Math.round(pctOf(best))}%${best.usage.fetchedAt != null ? `, cập nhật ${ago(Math.max(0, now - best.usage.fetchedAt))} trước` : ''})`
+        : 'Không có tài khoản khác còn hạn mức';
+      push(`limit:${cur.id}:${win}:${u.resetsAt}`, 'warning', `${cur.name} đã dùng ${Math.round(u.pct)}% cửa sổ ${label}`, hint);
+    }
+  }
+  for (const a of info.accounts) {
+    if (a.loginState === 'expired') push(`login:${a.id}:expired:${a.loginExpiresAt}`, 'critical', `${a.name}: cần /login lại`, 'Phiên đăng nhập đã hết hạn — chạy /login trong Claude Code');
+    else if (a.loginState === 'soon') push(`login:${a.id}:soon:${a.loginExpiresAt}`, 'warning', `${a.name}: sắp hết hạn đăng nhập`,
+      `Còn khoảng ${Math.max(1, Math.ceil((a.loginExpiresAt - now) / DAY))} ngày — nên /login lại sớm`);
   }
 
   if (s.cacheHit1h != null && s.n1h >= 20 && s.cacheHit1h * 100 < cfg.alertCacheHit) {
@@ -367,11 +449,12 @@ function metrics() {
 function statusLine() {
   let input = {};
   try { input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch {}
-  const { rows, now, P } = analyze();
+  const { rows, now, P, active } = analyze();
   const cfg = loadConfig();
   const s = A.summary(rows, now);
+  const w = A.summary(windowRows(rows, active), now);
   const parts = [];
-  if (s.window) parts.push(`5h ${usd(s.window.cost)} · reset ${hhmm(s.window.end)}`);
+  if (w.window) parts.push(`5h ${usd(w.window.cost)} · reset ${hhmm(w.window.end)}`);
   parts.push(`hôm nay ${usd(s.today)}${cfg.budgetDay > 0 ? `/${usd(cfg.budgetDay)}` : ''}`);
   parts.push(`24h ${fmt(s.tok24)} tok`);
   if (input.session_id) {
@@ -450,7 +533,41 @@ const STATIC = {
   '/analytics.js': ['analytics.js', 'text/javascript; charset=utf-8'],
 };
 
-function serve() {
+// Chống CSRF cho POST /api/accounts/*: cần header tự đặt (buộc preflight), Origin (nếu có) phải là chính
+// dashboard này, và nguồn kết nối phải là loopback (kể cả khi HOST=0.0.0.0).
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+function guardPost(req) {
+  if (req.headers['x-token-tracker'] !== '1') return false;
+  if (!LOOPBACK.has(req.socket.remoteAddress)) return false;
+  const origin = req.headers.origin;
+  if (origin !== undefined) {
+    const port = req.socket.localPort || PORT;
+    if (origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) return false;
+  }
+  return true;
+}
+
+// Xử lý /api/accounts*: true = đã trả lời, false = bị chặn (403), null = không phải đường dẫn tài khoản.
+async function accountsApi(req, url, json) {
+  if (url.pathname === '/api/accounts' && req.method === 'GET') {
+    const { rows, now } = analyze();
+    return json(accountsInfo(rows, now)), true;
+  }
+  const m = /^\/api\/accounts\/(switch|keep|rename)$/.exec(url.pathname);
+  if (!m || req.method !== 'POST') return null;
+  if (!guardPost(req)) return false;
+  let body;
+  try { body = JSON.parse(await readBody(req) || '{}'); } catch { throw new accounts.AccountError('FORMAT', 'Nội dung gửi lên không phải JSON hợp lệ'); }
+  if (!body || typeof body !== 'object') body = {};
+  if (m[1] === 'switch') {
+    const r = accounts.switchTo(body.id);
+    json({ ...r, running: r.running.map((p) => ({ pid: p.pid })) });   // không trả command line của tiến trình
+  } else if (m[1] === 'keep') json(accounts.keep());
+  else json(accounts.publicView(accounts.rename(body.id, body.name)));
+  return true;
+}
+
+function createServer() {
   const send = (res, code, type, body) => {
     res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' });
     res.end(body);
@@ -460,6 +577,11 @@ function serve() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     try {
+      if (url.pathname.startsWith('/api/accounts')) {
+        const r = await accountsApi(req, url, (d) => json(res, d));
+        if (r === false) return send(res, 403, 'application/json; charset=utf-8', JSON.stringify({ error: 'FORBIDDEN', message: 'Yêu cầu bị từ chối' }));
+        if (r !== null) return;
+      }
       if (url.pathname === '/api/records') return json(res, records(scan()));
       if (url.pathname === '/api/config' && req.method === 'POST') {
         const cfg = saveConfig(JSON.parse(await readBody(req) || '{}'));
@@ -476,13 +598,19 @@ function serve() {
         return json(res, { ok: true });
       }
       if (url.pathname === '/api/summary') {
-        const { rows, now } = analyze();
+        const { rows, now, active } = analyze();
         const s = A.summary(rows, now);
+        const w = A.summary(windowRows(rows, active), now);   // cửa sổ 5h của tài khoản đang chọn
+        const info = accountsInfo(rows, now);
+        const cur = info.accounts.find((a) => a.id === info.active);
         return json(res, {
           today: s.today, week: s.week, d24: s.d24, tok24: s.tok24,
-          window: s.window && { cost: s.window.cost, end: s.window.end }, projected: s.projected,
-          avgWindowCost: s.avgWindowCost,
-          text: `5h ${s.window ? `${usd(s.window.cost)} (reset ${hhmm(s.window.end)})` : '—'} · hôm nay ${usd(s.today)} · 24h ${fmt(s.tok24)} token`,
+          window: w.window && { cost: w.window.cost, end: w.window.end }, projected: w.projected,
+          avgWindowCost: w.avgWindowCost,
+          text: `5h ${w.window ? `${usd(w.window.cost)} (reset ${hhmm(w.window.end)})` : '—'} · hôm nay ${usd(s.today)} · 24h ${fmt(s.tok24)} token`,
+          account: cur ? { name: cur.name, fiveHour: cur.usage.fiveHour, sevenDay: cur.usage.sevenDay } : null,
+          conflict: !!info.conflict,
+          needLogin: info.accounts.filter((a) => a.loginState === 'expired').map((a) => a.name),
         });
       }
       if (url.pathname === '/metrics') return send(res, 200, 'text/plain; version=0.0.4; charset=utf-8', metrics());
@@ -494,10 +622,18 @@ function serve() {
       }
       send(res, 404, 'text/plain', 'not found');
     } catch (err) {
+      if (err instanceof accounts.AccountError) {
+        return send(res, 400, 'application/json; charset=utf-8', JSON.stringify({ error: err.code, message: err.message }));
+      }
       send(res, 500, 'text/plain; charset=utf-8', String((err && err.stack) || err));
     }
   });
 
+  return server;
+}
+
+function serve() {
+  const server = createServer();
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       console.log(`Cổng ${PORT} đang được dùng — có thể dashboard đã chạy sẵn: http://127.0.0.1:${PORT}`);
@@ -514,10 +650,14 @@ function serve() {
   });
 }
 
-const cmd = process.argv[2] || 'report';
-if (cmd === 'serve') serve();
-else if (cmd === 'status') statusLine();
-else if (cmd === 'report') report();
-else if (cmd === 'metrics') process.stdout.write(metrics());
-else if (cmd === 'check') checkAlerts();
-else { console.error('Dùng: node tracker.js [serve|report|status|metrics|check]'); process.exit(1); }
+module.exports = { scan, analyze, records, accountsInfo, checkAlerts, createServer };
+
+if (require.main === module) {
+  const cmd = process.argv[2] || 'report';
+  if (cmd === 'serve') serve();
+  else if (cmd === 'status') statusLine();
+  else if (cmd === 'report') report();
+  else if (cmd === 'metrics') process.stdout.write(metrics());
+  else if (cmd === 'check') checkAlerts();
+  else { console.error('Dùng: node tracker.js [serve|report|status|metrics|check]'); process.exit(1); }
+}
