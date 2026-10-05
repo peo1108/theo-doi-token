@@ -4,3 +4,6 @@ node_modules/
 .worktrees/
 .superpowers/
 dist/
+ios/build/
+ios/*.xcodeproj/
+ios/CCRemote/Info.plist

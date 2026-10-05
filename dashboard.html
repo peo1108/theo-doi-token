@@ -298,6 +298,21 @@
   .acct-msg.ok { background: var(--good-bg); }
   .acct-msg.err { background: var(--bad-bg); }
 
+  /* ---------------- điện thoại (CC Remote) ---------------- */
+  .rm-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 24px; }
+  .rm-step h3 { font-size: 12.5px; font-weight: 600; color: var(--muted); margin: 0 0 7px; }
+  .rm-step p { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; line-height: 1.55; }
+  .rm-url { font: 600 13px ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--text); background: var(--tile); border-radius: 7px; padding: 6px 9px; overflow-wrap: anywhere; user-select: all; display: inline-block; }
+  .rm-code { font: 700 28px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .18em; color: var(--text); }
+  .rm-dev { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; padding: 5px 0; border-top: 1px solid var(--line); }
+  .rm-dev:first-child { border-top: 0; }
+  .rm-dev small { color: var(--muted); font-size: 11.5px; display: block; }
+  .rm-ntfy { display: flex; gap: 6px; margin-top: 8px; }
+  .rm-ntfy input { flex: 1; min-width: 0; font: inherit; font-size: 13px; color: var(--text); background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; outline: none; }
+  .rm-ntfy input:focus { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .rm-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  @media (max-width: 900px) { .rm-grid { grid-template-columns: minmax(0, 1fr); } }
+
   .budget + .budget { margin-top: 14px; }
   .budget .b-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; }
   .budget .b-top b { font-size: 15px; }
@@ -446,6 +461,18 @@
       <span class="acct-msg" id="acctMsg" hidden></span>
     </div>
     <div class="acct-list" id="acctList"></div>
+  </section>
+
+  <!-- ============ điện thoại ============ -->
+  <section class="card" id="remoteCard" style="margin-bottom:10px">
+    <div class="card-head">
+      <div>
+        <h2>Điện thoại</h2>
+        <div class="card-sub">Điều khiển Claude Code từ app iOS <b>CC Remote</b> qua Tailscale · duyệt quyền, đổi tài khoản khi hết hạn mức rồi chạy tiếp</div>
+      </div>
+      <span class="acct-msg" id="rmMsg" hidden></span>
+    </div>
+    <div class="rm-grid" id="rmBody"><div class="empty">Đang tải…</div></div>
   </section>
 
   <!-- ============ cửa sổ 5 giờ + ngân sách ============ -->
@@ -2024,6 +2051,90 @@ function renderAll() {
 }
 
 let loading = false, loadAgain = false;
+/* ---------------- điện thoại (CC Remote) ---------------- */
+let RM = null, RM_BUSY = false, rmMsgTimer = 0, rmLoadedAt = 0;
+function setRmMsg(kind, text) {
+  const el = els('rmMsg');
+  el.hidden = !kind;
+  el.className = 'acct-msg' + (kind ? ' ' + kind : '');
+  el.textContent = text || '';
+  clearTimeout(rmMsgTimer);
+  if (kind === 'ok') rmMsgTimer = setTimeout(() => setRmMsg(null), 20e3);
+}
+async function loadRemote(fresh) {
+  try {
+    const res = await fetch('/api/remote' + (fresh ? '?fresh=1' : ''), { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    RM = await res.json();
+  } catch (e) { RM = { error: e.message }; }
+  rmLoadedAt = Date.now();
+  renderRemote();
+}
+function renderRemote() {
+  const box = els('rmBody');
+  if (!RM) return;
+  if (RM.error) { box.innerHTML = `<div class="empty">Không tải được: ${esc(RM.error)}</div>`; return; }
+  if (document.activeElement && document.activeElement.id === 'rmTopic') return;   // đang gõ topic: không vẽ lại
+  const ts = RM.tailscale || {};
+  const dis = RM_BUSY ? 'disabled' : '';
+  let step1;
+  if (!ts.installed) {
+    step1 = `${statusHTML('warn', 'Chưa cài Tailscale')}
+      <p>Cài Tailscale cho Windows và iPhone (miễn phí), đăng nhập cùng một tài khoản. Windows: <span class="rm-url">winget install tailscale.tailscale</span></p>`;
+  } else if (!ts.running) {
+    step1 = `${statusHTML('warn', 'Tailscale chưa kết nối')}<p>Mở Tailscale trên máy và đăng nhập.</p>`;
+  } else if (!ts.serving) {
+    step1 = `${statusHTML('info', 'Tailscale đã chạy · chưa mở cho app')}
+      <div class="rm-actions"><button class="ghost sm primary" data-rm="serve" ${dis}>Mở cho điện thoại</button></div>
+      <p>Tương đương <span class="rm-url">tailscale serve --bg ${RM.port}</span> — chỉ thiết bị trong tailnet của bạn vào được, có HTTPS sẵn.</p>`;
+  } else {
+    step1 = `${statusHTML('good', 'Sẵn sàng')}<p>Địa chỉ nhập vào app:</p><div class="rm-url">${esc(ts.url)}</div>`;
+  }
+  if (!RM.enabled) step1 += `<p>Server điều khiển đang tắt (REMOTE=0).</p>`;
+
+  const pair = RM.pair && RM.pair.expiresAt > Date.now() ? RM.pair : null;
+  const step2 = (pair
+    ? `<div class="rm-code">${esc(pair.code)}</div><p>Nhập mã này trong app · hết hạn lúc ${hhmm(pair.expiresAt)}</p>`
+    : `<div class="rm-actions"><button class="ghost sm primary" data-rm="pair" ${dis}>Tạo mã ghép</button></div><p>Mã 6 số, dùng một lần, hiệu lực 10 phút.</p>`)
+    + (RM.devices.length ? `<div style="margin-top:10px">${RM.devices.map(d => `<div class="rm-dev"><div>${esc(d.name)}<small>dùng lần cuối ${dShort(d.lastSeen)} ${hhmm(d.lastSeen)}</small></div>
+        <button class="ghost sm" data-rm="revoke" data-id="${esc(d.id)}" ${dis}>Thu hồi</button></div>`).join('')}</div>` : '')
+    + (RM.live ? `<p>${RM.live} phiên đang chạy từ điện thoại.</p>` : '');
+
+  const n = RM.ntfy;
+  const step3 = `${n ? statusHTML('good', 'Đang bật') : statusHTML('info', 'Tắt')}
+    <p>Báo khi Claude xin quyền hoặc xong việc lúc app đang đóng, qua app <b>ntfy</b> (miễn phí): đăng ký cùng topic trong app ntfy.</p>
+    <div class="rm-ntfy"><input id="rmTopic" placeholder="topic bí mật" value="${esc(n ? n.topic : '')}" spellcheck="false" autocomplete="off">
+      <button class="ghost sm" data-rm="rand" ${dis}>Ngẫu nhiên</button></div>
+    <div class="rm-actions"><button class="ghost sm primary" data-rm="ntfy" ${dis}>Lưu</button>
+      ${n ? `<button class="ghost sm" data-rm="ntfy-test" ${dis}>Gửi thử</button>` : ''}</div>`;
+
+  box.innerHTML = `<div class="rm-step"><h3>1 · Kết nối</h3>${step1}</div>
+    <div class="rm-step"><h3>2 · Ghép điện thoại</h3>${step2}</div>
+    <div class="rm-step"><h3>3 · Thông báo khi app đóng</h3>${step3}</div>`;
+}
+els('rmBody').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-rm]');
+  if (!b || RM_BUSY) return;
+  const act = b.dataset.rm;
+  if (act === 'rand') {
+    const a = new Uint8Array(12); crypto.getRandomValues(a);
+    els('rmTopic').value = 'cc-' + [...a].map(x => (x % 36).toString(36)).join('');
+    return;
+  }
+  const topic = els('rmTopic') ? els('rmTopic').value : '';
+  RM_BUSY = true; b.disabled = true; setRmMsg(null);
+  try {
+    if (act === 'pair') await acctPost('/api/remote/pair');
+    else if (act === 'revoke') { await acctPost('/api/remote/revoke', { id: b.dataset.id }); setRmMsg('ok', 'Đã thu hồi thiết bị'); }
+    else if (act === 'ntfy') { const r = await acctPost('/api/remote/ntfy', { topic }); setRmMsg('ok', r.ntfy ? 'Đã bật thông báo ntfy' : 'Đã tắt thông báo ntfy'); }
+    else if (act === 'ntfy-test') { const r = await acctPost('/api/remote/ntfy-test'); setRmMsg(r.ok ? 'ok' : 'err', r.ok ? 'Đã gửi — kiểm tra app ntfy' : 'Gửi không được'); }
+    else if (act === 'serve') { const r = await acctPost('/api/remote/serve'); setRmMsg(r.ok ? 'ok' : 'err', r.ok ? 'Đã mở cho điện thoại' : 'Tailscale báo: ' + r.output); }
+  } catch (err) { setRmMsg('err', err.message); }
+  RM_BUSY = false;
+  if (document.activeElement) document.activeElement.blur();
+  await loadRemote(act === 'serve');
+});
+
 async function load() {
   if (loading) { loadAgain = true; return; }   // đang nạp: nạp lại ngay sau đó để thấy thay đổi vừa ghi
   loading = true;
@@ -2107,7 +2218,13 @@ const qs = new URLSearchParams(location.search);
 if (qs.get('range') === '7d') document.querySelector('#rangeSeg [data-range="7d"]').click();
 if (qs.get('theme')) applyTheme(qs.get('theme'));
 load();
+loadRemote();
 setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
+// thẻ điện thoại: 30 giây/lần; đang hiện mã ghép thì 3 giây/lần để thấy ngay khi ghép xong
+setInterval(() => {
+  if (document.hidden || RM_BUSY) return;
+  if ((RM && RM.pair) || Date.now() - rmLoadedAt > 30e3) loadRemote();
+}, 3e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
 </script>
 </body>

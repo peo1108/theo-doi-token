@@ -1,0 +1,236 @@
+import SwiftUI
+
+struct HomeView: View {
+    @Environment(AppModel.self) private var app
+    @State private var confirmSwitch: Account?
+    @State private var showNew = false
+    @State private var showSettings = false
+    @State private var switchMessage: String?
+
+    var body: some View {
+        List {
+            if let err = app.lastError {
+                Section {
+                    Label(err, systemImage: "wifi.exclamationmark")
+                        .foregroundStyle(.red)
+                        .font(.callout)
+                }
+            }
+
+            if let info = app.state?.accounts, !info.list.isEmpty {
+                Section {
+                    ForEach(info.list) { a in
+                        AccountRow(account: a) { confirmSwitch = a }
+                    }
+                    if let switchMessage {
+                        Text(switchMessage).font(.footnote).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Tài khoản")
+                } footer: {
+                    if info.conflict {
+                        Text("Đăng nhập trên máy đang khác tài khoản đã chọn — mở dashboard để xử lý.")
+                    }
+                }
+            }
+
+            Section("Đang chạy") {
+                let live = app.state?.live ?? []
+                if live.isEmpty {
+                    Text(app.state == nil ? "Đang tải…" : "Không có phiên nào đang chạy")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(live) { s in
+                        NavigationLink(value: Route.session(s.id)) { LiveRow(session: s) }
+                    }
+                }
+            }
+
+            if let recent = app.state?.recent, !recent.isEmpty {
+                Section("Gần đây") {
+                    ForEach(recent) { r in
+                        NavigationLink(value: Route.session(r.id)) { RecentRow(session: r) }
+                    }
+                }
+            }
+        }
+        .navigationTitle(app.state?.host ?? "CC Remote")
+        .refreshable { await app.refresh() }
+        .task { await app.poll() }
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { showSettings = true } label: { Image(systemName: "gearshape") }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showNew = true } label: { Image(systemName: "square.and.pencil") }
+            }
+        }
+        .sheet(isPresented: $showNew) { NewSessionView() }
+        .sheet(isPresented: $showSettings) { SettingsView() }
+        .confirmationDialog(
+            confirmSwitch.map { "Đổi sang \($0.name)?" } ?? "",
+            isPresented: Binding(get: { confirmSwitch != nil }, set: { if !$0 { confirmSwitch = nil } }),
+            titleVisibility: .visible,
+            presenting: confirmSwitch
+        ) { a in
+            Button("Đổi sang \(a.name)") {
+                Task {
+                    do {
+                        let r = try await app.switchAccount(a.id)
+                        let n = r.restarted?.count ?? 0
+                        switchMessage = "Đã đổi sang \(a.name)" + (n > 0 ? " · khởi động lại \(n) phiên" : "")
+                    } catch {
+                        switchMessage = (error as? APIError)?.message ?? error.localizedDescription
+                    }
+                }
+            }
+        } message: { _ in
+            Text("Claude Code trên máy sẽ dùng tài khoản này. Phiên mở từ điện thoại tự khởi động lại khi rảnh; phiên mở trong terminal cần mở lại.")
+        }
+    }
+}
+
+struct UsageBar: View {
+    let label: String
+    let pct: Double?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(label).foregroundStyle(.secondary)
+                Spacer()
+                Text(pct.map { "\(Int($0.rounded()))%" } ?? "—").monospacedDigit().bold()
+            }
+            .font(.caption)
+            ProgressView(value: min(max((pct ?? 0) / 100, 0), 1))
+                .tint(color)
+        }
+    }
+
+    private var color: Color {
+        guard let pct else { return .gray }
+        return pct >= 90 ? .red : pct >= 70 ? .orange : .accentColor
+    }
+}
+
+struct AccountRow: View {
+    let account: Account
+    let onSwitch: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(account.name).font(.body.weight(.semibold))
+                        if account.active {
+                            Text("Đang dùng")
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.green.opacity(0.18), in: Capsule())
+                                .foregroundStyle(.green)
+                        } else if account.suggested {
+                            Text("Nên dùng")
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.blue.opacity(0.15), in: Capsule())
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                    if let email = account.email, !email.isEmpty {
+                        Text(email).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                if !account.active && account.error == nil {
+                    Button("Dùng", action: onSwitch)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
+            if let err = account.error {
+                Text(err).font(.caption).foregroundStyle(.red)
+            } else {
+                HStack(spacing: 14) {
+                    UsageBar(label: "5 giờ", pct: account.fiveHour?.pct)
+                    UsageBar(label: "7 ngày", pct: account.sevenDay?.pct)
+                }
+                if account.loginState == "expired" {
+                    Label("Hết hạn đăng nhập — cần /login lại", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.red)
+                } else if account.loginState == "soon" {
+                    Label("Sắp hết hạn đăng nhập", systemImage: "clock")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+struct StatusBadge: View {
+    let status: String
+
+    var body: some View {
+        let info = statusInfo(status)
+        Label(info.label, systemImage: info.icon)
+            .font(.caption2.bold())
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(color(info.color).opacity(0.15), in: Capsule())
+            .foregroundStyle(color(info.color))
+    }
+
+    private func color(_ name: String) -> Color {
+        switch name {
+        case "blue": return .blue
+        case "orange": return .orange
+        case "green": return .green
+        default: return .gray
+        }
+    }
+}
+
+struct LiveRow: View {
+    let session: SessionSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(session.title ?? "Phiên mới").font(.body.weight(.medium)).lineLimit(1)
+                Spacer()
+                StatusBadge(status: session.status)
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "folder").font(.caption2)
+                Text(session.project ?? "").font(.caption)
+                if session.pending > 0 {
+                    Text("· \(session.pending) chờ duyệt").font(.caption.bold()).foregroundStyle(.orange)
+                }
+            }
+            .foregroundStyle(.secondary)
+            if let t = session.lastText, !t.isEmpty {
+                Text(t).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+struct RecentRow: View {
+    let session: RecentSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(session.title).lineLimit(2)
+            HStack(spacing: 6) {
+                Image(systemName: "folder").font(.caption2)
+                Text(session.project)
+                Text("·")
+                Text(relativeTime(session.updatedAt))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+}

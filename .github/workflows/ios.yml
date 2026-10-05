@@ -1,0 +1,71 @@
+name: iOS app (CC Remote)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build (no signing)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project CCRemote.xcodeproj \
+            -scheme CCRemote \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | grep -E "error:|warning: .*(deprecated|never)|\*\* BUILD" || true
+          grep -q "\*\* BUILD SUCCEEDED \*\*" build.log || { grep -B2 -A6 "error:" build.log | head -150; exit 1; }
+
+      - name: Package IPA
+        run: |
+          APP="$(find build/DerivedData/Build/Products/Release-iphoneos -name 'CCRemote.app' -type d | head -n 1)"
+          test -n "$APP"
+          rm -rf build/Payload && mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          (cd build && zip -qry CCRemote-unsigned.ipa Payload)
+          ls -lh build/CCRemote-unsigned.ipa
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CCRemote-unsigned
+          path: |
+            ios/build/CCRemote-unsigned.ipa
+            ios/build.log
+          if-no-files-found: error
+
+      - name: Publish to release "ios-latest"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view ios-latest >/dev/null 2>&1 || \
+            gh release create ios-latest --title "CC Remote (iOS, bản mới nhất)" --notes "IPA chưa ký — ký bằng ESign rồi cài." --prerelease
+          gh release upload ios-latest build/CCRemote-unsigned.ipa --clobber
