@@ -709,6 +709,7 @@ class Session {
   broadcastState() {
     const st = { kind: 'state', ...this.summary() };
     for (const c of this.clients) c.send(st);
+    if (this.hub && this.hub.onSessionState) this.hub.onSessionState(this);   // hub-link: báo app danh sách phiên đổi
   }
 
   // 'Default (recommended)' -> tên model thật mà nó trỏ tới (vd. Opus 5.5)
