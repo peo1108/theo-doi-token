@@ -93,3 +93,243 @@ test('proto: tin vượt 50 MB bị huỷ; quá 4 tin dở bị từ chối; m�
   assert.doesNotThrow(() => a2.push({ pid: 'e', idx: 0, last: false }, mb, 61e3));
   assert.throws(() => a2.push({ pid: 'e', idx: 2, last: true }, mb, 61e3), (e) => e.code === 'BAD_PART', 'thiếu mảnh');
 });
+
+// ---------- Task 3: server, định tuyến, cách ly ----------
+
+const { createHubServer } = require('../hub/hub.js');
+
+// Hub thật trên cổng ngẫu nhiên + tiện ích HTTP / WebSocket.
+async function startHub(opts = {}) {
+  const h = createHubServer({ dataDir: tmp(), rpcTimeoutMs: 300, ...opts });
+  await new Promise((r) => h.server.listen(0, '127.0.0.1', r));
+  const port = h.server.address().port;
+  const base = `http://127.0.0.1:${port}`;
+  const post = async (p, body, headers = {}) => {
+    const r = await fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body || {}) });
+    return { status: r.status, body: await r.json() };
+  };
+  const conns = [];
+  const ws = (hello) => new Promise((resolve) => {
+    const c = wsClient(`ws://127.0.0.1:${port}/v1/ws`, hello, resolve);
+    conns.push(c);
+  });
+  const stop = async () => { for (const c of conns) try { c.s.close(); } catch {} await h.close(); };
+  return { h, port, base, post, ws, stop };
+}
+
+// Kết nối WebSocket thử: gom tin, chờ tin thoả điều kiện, chờ đóng.
+function wsClient(url, hello, onOpen) {
+  const s = new WebSocket(url);
+  s.binaryType = 'arraybuffer';
+  const c = { s, msgs: [], waiters: [], closeCode: null };
+  c.closed = new Promise((res) => s.addEventListener('close', (e) => { c.closeCode = e.code; res(e.code); }));
+  s.addEventListener('message', (e) => {
+    const m = typeof e.data === 'string' ? JSON.parse(e.data) : { binary: Buffer.from(e.data) };
+    const w = c.waiters.find((x) => x.pred(m));
+    if (w) { c.waiters.splice(c.waiters.indexOf(w), 1); w.res(m); } else c.msgs.push(m);
+  });
+  c.send = (o) => s.send(Buffer.isBuffer(o) ? o : JSON.stringify(o));
+  c.next = (pred, ms = 3000) => {
+    const hit = c.msgs.find(pred);
+    if (hit) { c.msgs.splice(c.msgs.indexOf(hit), 1); return Promise.resolve(hit); }
+    return new Promise((res, rej) => {
+      const w = { pred, res: (m) => { clearTimeout(t); res(m); } };
+      const t = setTimeout(() => { c.waiters.splice(c.waiters.indexOf(w), 1); rej(new Error('hết giờ chờ tin: ' + pred)); }, ms);
+      c.waiters.push(w);
+    });
+  };
+  c.close = () => s.close();
+  s.addEventListener('open', () => { if (hello) c.send(hello); onOpen(c); });
+  return c;
+}
+
+// Admin + một người được mời; mỗi người một máy (agent) và một app, đã bắt tay xong.
+async function twoUsers(T) {
+  const { h } = T;
+  await h.cli(['init', 'cam', 'mat-khau-cam']);
+  const invite = await h.cli(['invite']);
+  const reg = await T.post('/v1/auth/register', { invite, username: 'Bob', password: 'mat-khau-bob', deviceName: 'iPhone Bob' });
+  assert.equal(reg.status, 200, JSON.stringify(reg.body));
+  const loginA = await T.post('/v1/auth/login', { username: 'cam', password: 'mat-khau-cam', deviceName: 'iPhone Cam' });
+  const pairA = await T.post('/v1/machines/pair', { username: 'cam', password: 'mat-khau-cam', machineName: 'pc-cam' });
+  const pairB = await T.post('/v1/machines/pair', { username: 'bob', password: 'mat-khau-bob', machineName: 'pc-bob' });
+  const agentA = await T.ws({ type: 'hello', proto: 1, role: 'agent', token: pairA.body.machineToken });
+  await agentA.next((m) => m.type === 'welcome');
+  const agentB = await T.ws({ type: 'hello', proto: 1, role: 'agent', token: pairB.body.machineToken });
+  await agentB.next((m) => m.type === 'welcome');
+  const appA = await T.ws({ type: 'hello', proto: 1, role: 'app', token: loginA.body.token });
+  const wa = await appA.next((m) => m.type === 'welcome');
+  const appB = await T.ws({ type: 'hello', proto: 1, role: 'app', token: reg.body.token });
+  const wb = await appB.next((m) => m.type === 'welcome');
+  return { agentA, agentB, appA, appB, mA: pairA.body.machineId, mB: pairB.body.machineId, wa, wb, tokA: loginA.body.token, tokB: reg.body.token };
+}
+
+test('hub HTTP: đăng ký bằng mã mời, đăng nhập, đăng xuất, ghép máy, health; sai tên / sai mật khẩu cùng lỗi; khoá sau 5 lần sai', async () => {
+  const T = await startHub();
+  try {
+    assert.deepEqual((await (await fetch(T.base + '/v1/health')).json()), { ok: true, proto: 1 });
+    await T.h.cli(['init', 'cam', 'mat-khau-cam']);
+    assert.equal((await T.post('/v1/auth/register', { invite: 'BAY', username: 'bob', password: 'mat-khau-bob' })).body.error, 'BAD_INVITE');
+    const invite = await T.h.cli(['invite']);
+    assert.equal((await T.post('/v1/auth/register', { invite, username: 'bob', password: 'ngan' })).body.error, 'WEAK_PASSWORD');
+    assert.equal((await T.post('/v1/auth/register', { invite, username: 'cam', password: 'mat-khau-bob' })).body.error, 'USERNAME_TAKEN');
+    const reg = await T.post('/v1/auth/register', { invite, username: 'bob', password: 'mat-khau-bob', deviceName: 'iPhone' });
+    assert.equal(reg.status, 200);
+    assert.equal(reg.body.user.username, 'bob');
+    assert.equal(reg.body.user.admin, false);
+    assert.equal((await T.post('/v1/auth/register', { invite, username: 'eve', password: 'mat-khau-eve' })).body.error, 'BAD_INVITE', 'mã mời chỉ dùng một lần');
+
+    const noUser = await T.post('/v1/auth/login', { username: 'khongco', password: 'mat-khau-bob' });
+    const badPw = await T.post('/v1/auth/login', { username: 'bob', password: 'sai-mat-khau' });
+    assert.equal(noUser.status, 401);
+    assert.deepEqual(noUser.body, badPw.body, 'không lộ tên đăng nhập có tồn tại');
+    for (let i = 0; i < 4; i++) await T.post('/v1/auth/login', { username: 'bob', password: 'sai-mat-khau' });
+    const locked = await T.post('/v1/auth/login', { username: 'bob', password: 'mat-khau-bob' });
+    assert.equal(locked.status, 429);
+    assert.equal(locked.body.error, 'LOCKED');
+
+    const login = await T.post('/v1/auth/login', { username: 'CAM', password: 'mat-khau-cam', deviceName: 'iPad' });
+    assert.equal(login.status, 200);
+    assert.equal(login.body.user.admin, true);
+    const pair = await T.post('/v1/machines/pair', { username: 'cam', password: 'mat-khau-cam', machineName: 'admin-pc' });
+    assert.match(pair.body.machineId, /^[0-9a-f]{16}$/);
+    assert.ok(pair.body.machineToken.length >= 40);
+    const out = await T.post('/v1/auth/logout', {}, { Authorization: `Bearer ${login.body.token}` });
+    assert.equal(out.body.ok, true);
+    const app = await T.ws({ type: 'hello', proto: 1, role: 'app', token: login.body.token });
+    assert.equal(await app.closed, 4001, 'token đã đăng xuất không dùng được');
+  } finally { await T.stop(); }
+});
+
+test('hub WS: sai token đóng 4001; lệch proto báo cần cập nhật; im không hello thì đóng', async () => {
+  const T = await startHub({ helloTimeoutMs: 200 });
+  try {
+    const bad = await T.ws({ type: 'hello', proto: 1, role: 'app', token: 'sai' });
+    assert.equal(await bad.closed, 4001);
+    await T.h.cli(['init', 'cam', 'mat-khau-cam']);
+    const login = await T.post('/v1/auth/login', { username: 'cam', password: 'mat-khau-cam' });
+    const old = await T.ws({ type: 'hello', proto: 99, role: 'app', token: login.body.token });
+    assert.equal((await old.next((m) => m.type === 'error')).code, 'UPGRADE_APP');
+    assert.equal(await old.closed, 4002);
+    const quiet = await T.ws(null);
+    assert.equal(await quiet.closed, 4000);
+  } finally { await T.stop(); }
+});
+
+test('hub định tuyến: req/res, hết giờ, sub chỉ tới app đã sub, scope user tới mọi app, máy vào / ra mạng', async () => {
+  const T = await startHub();
+  try {
+    const U = await twoUsers(T);
+    assert.deepEqual(U.wa.machines.map((m) => [m.id, m.online]), [[U.mA, true]]);
+    U.appA.send({ type: 'req', id: 'q1', machine: U.mA, method: 'state', params: {} });
+    const r = await U.agentA.next((m) => m.type === 'req');
+    assert.equal(r.method, 'state');
+    assert.ok(r.conn);
+    U.agentA.send({ type: 'res', id: 'q1', conn: r.conn, ok: true, result: { live: [] } });
+    assert.deepEqual((await U.appA.next((m) => m.type === 'res')).result, { live: [] });
+    U.appA.send({ type: 'req', id: 'q2', machine: U.mA, method: 'state' });
+    const to = await U.appA.next((m) => m.type === 'res' && m.id === 'q2');
+    assert.equal(to.ok, false);
+    assert.equal(to.error.code, 'TIMEOUT');
+    const appA2 = await T.ws({ type: 'hello', proto: 1, role: 'app', token: U.tokA });
+    await appA2.next((m) => m.type === 'welcome');
+    U.appA.send({ type: 'sub', machine: U.mA, session: 's1', after: 0, epoch: '' });
+    const sub = await U.agentA.next((m) => m.type === 'sub');
+    assert.equal(sub.session, 's1');
+    U.agentA.send({ type: 'event', session: 's1', data: { kind: 'assistant', text: 'chào' } });
+    assert.equal((await U.appA.next((m) => m.type === 'event')).data.text, 'chào');
+    U.agentA.send({ type: 'event', scope: 'user', data: { kind: 'sessions' } });
+    const ev = await appA2.next((m) => m.type === 'event');
+    assert.equal(ev.data.kind, 'sessions', 'app không sub phiên vẫn nhận sự kiện chung');
+    assert.equal(ev.machine, U.mA);
+    assert.ok(!appA2.msgs.some((m) => m.type === 'event' && m.data.text === 'chào'));
+    U.appA.close();
+    assert.equal((await U.agentA.next((m) => m.type === 'unsub')).session, 's1');
+    U.agentA.close();
+    const off = await appA2.next((m) => m.type === 'machine');
+    assert.deepEqual([off.id, off.online], [U.mA, false]);
+    appA2.send({ type: 'req', id: 'q3', machine: U.mA, method: 'state' });
+    assert.equal((await appA2.next((m) => m.type === 'res')).error.code, 'NOT_FOUND');
+  } finally { await T.stop(); }
+});
+
+test('hub cách ly: người này không chạm được máy / kết nối / mảnh của người kia', async () => {
+  const T = await startHub();
+  try {
+    const U = await twoUsers(T);
+    U.appB.send({ type: 'req', id: 'x1', machine: U.mA, method: 'state' });
+    const e1 = await U.appB.next((m) => m.type === 'res');
+    U.appB.send({ type: 'req', id: 'x2', machine: 'ffffffffffffffff', method: 'state' });
+    const e2 = await U.appB.next((m) => m.type === 'res');
+    assert.deepEqual(e1.error, e2.error);
+    assert.equal(e1.error.code, 'NOT_FOUND');
+    U.appB.send({ type: 'sub', machine: U.mA, session: 's1' });
+    assert.equal((await U.appB.next((m) => m.type === 'error')).code, 'NOT_FOUND');
+    U.appA.send({ type: 'req', id: 'a1', machine: U.mA, method: 'state' });
+    const ra = await U.agentA.next((m) => m.type === 'req');
+    U.agentB.send({ type: 'res', id: 'a1', conn: ra.conn, ok: true, result: { hack: 1 } });
+    U.agentB.send({ type: 'event', to: ra.conn, session: 's1', data: { kind: 'assistant', text: 'hack' } });
+    U.agentB.send({ type: 'event', scope: 'user', data: { kind: 'sessions' } });
+    const parts = proto.splitMessage({ type: 'req', id: 'x3', method: 'state', params: { t: 'y'.repeat(600e3) } }, { machine: U.mA });
+    for (const p of parts) U.appB.send(p);
+    assert.equal((await U.appB.next((m) => m.type === 'error' && m.pid)).code, 'NOT_FOUND');
+    await new Promise((r) => setTimeout(r, 150));
+    assert.ok(!U.appA.msgs.some((m) => (m.type === 'res' && m.result && m.result.hack) || m.type === 'event'), 'A không nhận gì từ B');
+    assert.ok(!U.agentA.msgs.some((m) => m.binary), 'agent A không nhận mảnh của B');
+    assert.deepEqual(U.wb.machines.map((m) => m.id), [U.mB]);
+  } finally { await T.stop(); }
+});
+
+test('hub chuyển mảnh tin lớn tới đúng máy, gắn conn để máy trả lời được', async () => {
+  const T = await startHub();
+  try {
+    const U = await twoUsers(T);
+    const msg = { type: 'req', id: 'big', method: 'sessions.send', params: { text: 'z'.repeat(3e6) } };
+    for (const p of proto.splitMessage(msg, { machine: U.mA })) U.appA.send(p);
+    const asm = new proto.Assembler();
+    let got = null, conn = null;
+    while (!got) {
+      const { binary } = await U.agentA.next((m) => m.binary);
+      const { header, payload } = proto.decodePart(binary);
+      conn = header.conn;
+      got = asm.push(header, payload);
+    }
+    assert.equal(got.params.text.length, 3e6);
+    assert.ok(conn);
+    U.agentA.send({ type: 'res', id: 'big', conn, ok: true, result: { ok: 1 } });
+    assert.equal((await U.appA.next((m) => m.type === 'res')).result.ok, 1);
+  } finally { await T.stop(); }
+});
+
+test('hub hàm riêng + thu hồi: thiết bị, máy, đổi mật khẩu, đăng xuất mọi nơi, khoá tài khoản', async () => {
+  const T = await startHub();
+  try {
+    const U = await twoUsers(T);
+    const call = async (c, method, params) => {
+      const id = Math.random().toString(36).slice(2);
+      c.send({ type: 'req', id, machine: 'hub', method, params });
+      return c.next((m) => m.type === 'res' && m.id === id);
+    };
+    const devs = (await call(U.appA, 'devices')).result;
+    assert.deepEqual(devs.map((d) => d.name), ['iPhone Cam']);
+    assert.equal((await call(U.appB, 'devices.revoke', { id: devs[0].id })).error.code, 'NOT_FOUND', 'B không thu hồi được thiết bị của A');
+    assert.equal((await call(U.appA, 'machines.rename', { id: U.mA, name: 'PC nhà' })).ok, true);
+    assert.equal((await U.appA.next((m) => m.type === 'machine')).name, 'PC nhà');
+    assert.equal((await call(U.appB, 'machines.rename', { id: U.mA, name: 'x' })).error.code, 'NOT_FOUND');
+    const nt = (await call(U.appA, 'ntfy')).result;
+    assert.match(nt.topic, /^[0-9a-f]{32}$/);
+    assert.equal(nt.subscribe, `ntfy://ntfy.sh/${nt.topic}`);
+    assert.equal((await call(U.appA, 'password', { old: 'sai', new: 'mat-khau-moi' })).error.code, 'BAD_LOGIN');
+    assert.equal((await call(U.appA, 'password', { old: 'mat-khau-cam', new: 'mat-khau-moi' })).ok, true);
+    assert.equal((await call(U.appA, 'state')).error.code, 'NOT_FOUND', 'hàm lạ của hub');
+    assert.equal(U.appA.closeCode, null, 'đổi mật khẩu không đá ai ra');
+    assert.equal((await call(U.appA, 'machines.revoke', { id: U.mA })).ok, true);
+    assert.equal(await U.agentA.closed, 4001);
+    await T.h.cli(['lock', 'bob']);
+    T.h.router.recheck();
+    assert.equal(await U.appB.closed, 4001);
+    assert.equal(await U.agentB.closed, 4001);
+    assert.equal((await call(U.appA, 'logoutAll')).ok, true);
+    assert.equal(await U.appA.closed, 4001);
+  } finally { await T.stop(); }
+});
