@@ -1,0 +1,7 @@
+{
+  "name": "cc-remote-hub",
+  "private": true,
+  "description": "Hub trung chuyển CC Remote (VPS)",
+  "engines": { "node": ">=22.13" },
+  "dependencies": { "ws": "^8.18.0" }
+}
