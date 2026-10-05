@@ -401,3 +401,303 @@ test('publicView: không lộ token', () => {
   assert.equal(A.publicView({ ...p, oauth: null }).loginExpiresAt, null);
   assert.equal(A.publicView({ id: 'bad', error: 'FORMAT' }).error, 'FORMAT');
 });
+
+// ---------- dòng thời gian ----------
+
+test('readLog: không có file -> rỗng; writeLog rồi readLog khứ hồi', () => {
+  withEnv(() => {
+    assert.deepEqual(A.readLog(), { v: 1, entries: [], conflict: null });
+    const log = A.readLog();
+    A.addEntry(log, { t: 1, id: 'acc-1', reason: 'init' });
+    log.conflict = { fileId: 'acc-2', chosenId: 'acc-1', since: 5 };
+    A.writeLog(log);
+    assert.deepEqual(A.readLog(), log);
+  });
+});
+
+test('addEntry: chèn giữ thứ tự tăng theo t; chosenId là mục cuối', () => {
+  const log = { v: 1, entries: [{ t: 0, id: 'a' }, { t: 10, id: 'c' }], conflict: null };
+  A.addEntry(log, { t: 5, id: 'b' });
+  assert.deepEqual(log.entries.map((e) => e.t), [0, 5, 10]);
+  assert.equal(A.chosenId(log), 'c');
+  A.addEntry(log, { t: 10, id: 'd' });   // trùng t: mục mới đứng sau
+  assert.deepEqual(log.entries.map((e) => e.id), ['a', 'b', 'c', 'd']);
+  assert.equal(A.chosenId({ v: 1, entries: [], conflict: null }), null);
+});
+
+// ---------- nhận diện tiến trình Claude Code ----------
+
+const VSCODE_EXE = 'c:\\Users\\cam\\.vscode\\extensions\\anthropic.claude-code-2.1.289-win32-x64\\resources\\native-binary\\claude.exe';
+const DESKTOP_EXE = 'C:\\Program Files\\WindowsApps\\Claude_2.19675.0.0_x64__pzs8sxrjxfjjc\\app\\Claude.exe';
+
+test('isClaudeCodeProcess: Claude Code có, ứng dụng Claude desktop và tiến trình khác không', () => {
+  assert.equal(A.isClaudeCodeProcess({ name: 'claude.exe', path: VSCODE_EXE }), true);
+  assert.equal(A.isClaudeCodeProcess({ name: 'claude.exe', path: VSCODE_EXE, cmd: `${VSCODE_EXE} --output-format stream-json --verbose` }), true);
+  assert.equal(A.isClaudeCodeProcess({ name: 'node.exe', cmd: 'node C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js' }), true);
+  assert.equal(A.isClaudeCodeProcess({ name: 'claude.exe', path: 'C:\\Users\\cam\\.local\\bin\\claude.exe' }), true);
+  // không phân biệt hoa thường; ExecutablePath rỗng thì dựa vào CommandLine
+  assert.equal(A.isClaudeCodeProcess({ name: 'CLAUDE.EXE', path: null, cmd: `"${VSCODE_EXE}" --resume` }), true);
+  assert.equal(A.isClaudeCodeProcess({ name: 'claude', cmd: 'claude --continue' }), true);
+  // ứng dụng desktop: tiến trình chính và các tiến trình con Electron
+  assert.equal(A.isClaudeCodeProcess({ name: 'Claude.exe', path: DESKTOP_EXE }), false);
+  assert.equal(A.isClaudeCodeProcess({ name: 'Claude.exe', path: DESKTOP_EXE, cmd: `"${DESKTOP_EXE}"` }), false);
+  assert.equal(A.isClaudeCodeProcess({ name: 'Claude.exe', path: DESKTOP_EXE, cmd: `"${DESKTOP_EXE}" --type=renderer --lang=en-US` }), false);
+  assert.equal(A.isClaudeCodeProcess({ name: 'Claude.exe', path: null, cmd: `"${DESKTOP_EXE}" --type=gpu-process` }), false);
+  assert.equal(A.isClaudeCodeProcess({ name: 'Claude.exe', path: null, cmd: `"${DESKTOP_EXE}"` }), false);
+  // tiến trình khác
+  assert.equal(A.isClaudeCodeProcess({ name: 'node.exe', cmd: 'node tracker.js serve' }), false);
+  assert.equal(A.isClaudeCodeProcess({ name: 'powershell.exe', cmd: 'powershell -Command echo @anthropic-ai/claude-code' }), false);
+  assert.equal(A.isClaudeCodeProcess({ name: 'chrome.exe', path: 'C:\\x\\chrome.exe' }), false);
+  assert.equal(A.isClaudeCodeProcess({}), false);
+});
+
+test('parseWindowsProcesses: một object (không phải mảng), mảng, loại PID của chính mình và tiến trình khác', () => {
+  const one = { ProcessId: 10, Name: 'claude.exe', ExecutablePath: VSCODE_EXE, CommandLine: `${VSCODE_EXE} --output-format stream-json` };
+  // Get-CimInstance trả một object khi chỉ có một kết quả
+  assert.deepEqual(A.parseWindowsProcesses(JSON.stringify(one), 1), [{ pid: 10, cmd: one.CommandLine }]);
+  const many = [
+    one,
+    { ProcessId: 11, Name: 'Claude.exe', ExecutablePath: DESKTOP_EXE, CommandLine: null },
+    { ProcessId: 12, Name: 'claude.exe', ExecutablePath: null, CommandLine: `"${VSCODE_EXE}" -p x` },   // ExecutablePath null
+    { ProcessId: 13, Name: 'claude.exe', ExecutablePath: VSCODE_EXE, CommandLine: null },
+    { ProcessId: 14, Name: 'node.exe', ExecutablePath: 'C:\\node.exe', CommandLine: 'node tracker.js serve' },
+  ];
+  assert.deepEqual(A.parseWindowsProcesses(JSON.stringify(many), 13).map((p) => p.pid), [10, 12]);
+  assert.deepEqual(A.parseWindowsProcesses('', 1), []);
+  assert.throws(() => A.parseWindowsProcesses('không phải json', 1));
+});
+
+test('parsePsProcesses: lọc dòng ps -eo pid,args', () => {
+  const text = [
+    '  PID COMMAND',
+    '  101 /home/u/.local/bin/claude --continue',
+    '  102 node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js',
+    '  103 /Applications/Claude.app/Contents/MacOS/Claude',
+    '  104 node tracker.js serve',
+    '  105 claude',
+  ].join('\n');
+  assert.deepEqual(A.parsePsProcesses(text, 105).map((p) => p.pid), [101, 102]);
+});
+
+test('findClaudeProcesses: trả { ok, list } và không bao giờ ném', () => {
+  const r = A.findClaudeProcesses();
+  assert.equal(typeof r.ok, 'boolean');
+  assert.ok(Array.isArray(r.list));
+  assert.ok(r.list.every((p) => typeof p.pid === 'number' && p.pid !== process.pid));
+});
+
+// ---------- snapshot ----------
+
+test('snapshot: lưu hồ sơ của tài khoản trong file; không đăng nhập -> null', () => {
+  withEnv(({ dir }) => {
+    assert.equal(A.snapshot(A.readLogin(), 5), null);
+    writeLoginFiles(dir, fakeAccount(1), { usage: true });
+    const p = A.snapshot(A.readLogin(), 7);
+    assert.equal(p.id, 'acc-1');
+    assert.equal(p.savedAt, 7);
+    assert.deepEqual(A.loadProfile('acc-1'), p);
+    assert.equal(p.usage.accountUuid, 'acc-1');
+    assert.deepEqual(A.listProfiles().map((x) => x.id), ['acc-1']);
+  });
+});
+
+// ---------- switchTo ----------
+
+const noProcs = () => ({ ok: true, list: [] });
+const filesText = () => [readText(A.paths().credFile), readText(A.paths().claudeJson)];
+const backupCount = () => {
+  try { return fs.readdirSync(A.paths().backupDir).filter((n) => n.endsWith('.json')).length; } catch { return 0; }
+};
+
+// acc1 đang đăng nhập (token mới rt-1), hồ sơ acc1 cũ (rt-old) và hồ sơ acc2.
+function setupTwo(dir) {
+  const a1 = fakeAccount(1);
+  const a2 = fakeAccount(2);
+  writeLoginFiles(dir, a1);
+  A.saveProfile(profileOf(a1, { oauth: { ...a1.oauth, refreshToken: 'rt-old' } }));
+  A.saveProfile(profileOf(a2));
+  const log = A.readLog();
+  A.addEntry(log, { t: 100, id: 'acc-1', reason: 'init' });
+  A.writeLog(log);
+  return { a1, a2 };
+}
+
+test('switchTo: lưu token mới của tài khoản cũ, ghi tài khoản đích, thêm log, một cặp sao lưu', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    const r = A.switchTo('user2', { now: 5000, processes: () => ({ ok: true, list: [{ pid: 1 }] }) });
+    assert.equal(r.ok, true);
+    assert.equal(r.from, 'acc-1');
+    assert.equal(r.to, 'acc-2');
+    assert.equal(r.already, undefined);
+    assert.equal(r.running.length, 1);
+    assert.equal(r.checked, true);
+    assert.equal(A.loadProfile('acc-1').oauth.refreshToken, 'rt-1');
+    const l = A.readLogin();
+    assert.equal(l.id, 'acc-2');
+    assert.equal(l.cred.claudeAiOauth.refreshToken, 'rt-2');
+    assert.equal(l.cred.organizationUuid, 'org-2');
+    assert.equal(l.cred.mcpOAuth.x.accessToken, 'mcp');   // khoá khác giữ nguyên
+    assert.equal(l.cfg.numStartups, 7);
+    assert.deepEqual(A.readLog().entries.at(-1), { t: 5000, id: 'acc-2', reason: 'switch', running: 1 });
+    assert.equal(backupCount(), 2);
+    assert.equal(A.isLocked(), false);
+  });
+});
+
+test('switchTo: không kiểm tra được tiến trình -> checked false, log không có running', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    const r = A.switchTo('user2', { now: 5000, processes: () => ({ ok: false, list: [] }) });
+    assert.equal(r.checked, false);
+    assert.deepEqual(r.running, []);
+    assert.deepEqual(A.readLog().entries.at(-1), { t: 5000, id: 'acc-2', reason: 'switch' });
+  });
+});
+
+test('switchTo: TT_SKIP_PROCESS_CHECK=1 -> mặc định coi như không có tiến trình', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    const saved = process.env.TT_SKIP_PROCESS_CHECK;
+    process.env.TT_SKIP_PROCESS_CHECK = '1';
+    try {
+      const r = A.switchTo('user2', { now: 5000 });
+      assert.equal(r.checked, true);
+      assert.deepEqual(r.running, []);
+      assert.equal(A.readLog().entries.at(-1).running, 0);
+    } finally {
+      if (saved === undefined) delete process.env.TT_SKIP_PROCESS_CHECK; else process.env.TT_SKIP_PROCESS_CHECK = saved;
+    }
+  });
+});
+
+test('switchTo: sang chính tài khoản đang ở -> already, log và file không đổi', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    const log0 = A.readLog();
+    const files0 = filesText();
+    const r = A.switchTo('user1', { now: 5000, processes: noProcs });
+    assert.equal(r.already, true);
+    assert.equal(r.from, 'acc-1');
+    assert.equal(r.to, 'acc-1');
+    assert.deepEqual(A.readLog(), log0);
+    assert.deepEqual(filesText(), files0);
+    assert.equal(backupCount(), 0);
+    assert.equal(A.isLocked(), false);
+  });
+});
+
+test('switchTo: hồ sơ đích không có oauth -> NO_TOKEN, file không đổi', () => {
+  withEnv(({ dir }) => {
+    const { a2 } = setupTwo(dir);
+    A.saveProfile(profileOf(a2, { oauth: undefined }));
+    const files0 = filesText();
+    throwsCode(() => A.switchTo('user2', { now: 5000, processes: noProcs }), 'NO_TOKEN');
+    assert.deepEqual(filesText(), files0);
+    assert.equal(A.readLog().entries.length, 1);
+    assert.equal(backupCount(), 0);
+    assert.equal(A.isLocked(), false);
+  });
+});
+
+test('switchTo: không có hồ sơ khớp -> NOT_FOUND, nhả khoá', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    throwsCode(() => A.switchTo('nobody', { now: 5000, processes: noProcs }), 'NOT_FOUND');
+    assert.equal(A.isLocked(), false);
+  });
+});
+
+test('switchTo: đang bị khoá -> LOCKED, file không đổi', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    const files0 = filesText();
+    fs.writeFileSync(A.paths().lockFile, JSON.stringify({ pid: process.pid, t: Date.now() }));
+    throwsCode(() => A.switchTo('user2', { processes: noProcs }), 'LOCKED');
+    assert.deepEqual(filesText(), files0);
+  });
+});
+
+test('switchTo: sau /logout vẫn đổi được sang hồ sơ đã lưu, không tạo hồ sơ rỗng', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    editJSON(A.paths().credFile, (o) => { delete o.claudeAiOauth; });
+    editJSON(A.paths().claudeJson, (o) => { delete o.oauthAccount; });
+    assert.equal(A.readLogin().id, null);
+    const r = A.switchTo('user2', { now: 5000, processes: noProcs });
+    assert.equal(r.from, null);
+    assert.equal(r.to, 'acc-2');
+    assert.equal(A.readLogin().id, 'acc-2');
+    assert.deepEqual(A.listProfiles().map((p) => p.id).sort(), ['acc-1', 'acc-2']);
+  });
+});
+
+test('switchTo: lỗi ghi -> WRITE_FAILED, hai file trùng bản trước khi đổi, nhả khoá, thử 3 lần', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    const files0 = filesText();
+    let calls = 0;
+    // ghi dở file thứ nhất rồi ném EPERM: restore phải đưa mọi thứ về như cũ
+    const write = () => {
+      calls++;
+      fs.writeFileSync(A.paths().credFile, '{"dở dang":');
+      throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+    };
+    throwsCode(() => A.switchTo('user2', { now: 5000, processes: noProcs, write }), 'WRITE_FAILED');
+    assert.equal(calls, 3);
+    assert.deepEqual(filesText(), files0);
+    assert.equal(A.readLog().entries.length, 1);
+    assert.equal(A.isLocked(), false);
+    assert.equal(A.withLock(() => 'ok'), 'ok');
+  });
+});
+
+test('switchTo: ghi xong nhưng đọc lại sai tài khoản -> thử lại rồi khôi phục', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    const files0 = filesText();
+    let calls = 0;
+    throwsCode(() => A.switchTo('user2', { now: 5000, processes: noProcs, write: () => { calls++; } }), 'WRITE_FAILED');
+    assert.equal(calls, 3);
+    assert.deepEqual(filesText(), files0);
+    assert.equal(A.isLocked(), false);
+  });
+});
+
+test('switchTo: lần ghi đầu lỗi, lần sau được -> thành công', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    let calls = 0;
+    const write = (p) => {
+      if (++calls === 1) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+      A.writeLogin(p);
+    };
+    const r = A.switchTo('user2', { now: 5000, processes: noProcs, write });
+    assert.equal(r.to, 'acc-2');
+    assert.equal(calls, 2);
+    assert.equal(A.readLogin().id, 'acc-2');
+  });
+});
+
+test('switchTo: không ghi được log -> khôi phục file, WRITE_FAILED', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    const files0 = filesText();
+    fs.rmSync(A.paths().logFile);
+    fs.mkdirSync(A.paths().logFile);   // log là thư mục -> không ghi được
+    throwsCode(() => A.switchTo('user2', { now: 5000, processes: noProcs }), 'WRITE_FAILED');
+    assert.deepEqual(filesText(), files0);
+    assert.equal(A.isLocked(), false);
+  });
+});
+
+test('switchTo: xoá conflict', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    const log = A.readLog();
+    log.conflict = { fileId: 'acc-1', chosenId: 'acc-2', since: 200 };
+    A.writeLog(log);
+    A.switchTo('user2', { now: 5000, processes: noProcs });
+    assert.equal(A.readLog().conflict, null);
+  });
+});

@@ -2,10 +2,11 @@
 // bằng cách thay đúng các trường đăng nhập trong file của chính Claude Code
 // (.credentials.json: claudeAiOauth + organizationUuid; .claude.json: oauthAccount).
 //
-// Module này chỉ chứa phần nền: đường dẫn, đọc/kiểm tra, hồ sơ, ghi atomic, sao lưu, khoá.
+// Gồm: đường dẫn, đọc/kiểm tra, hồ sơ, ghi atomic, sao lưu, khoá, dòng thời gian, tìm tiến trình, switchTo.
 // Không bao giờ ghi accessToken/refreshToken ra log hay API (xem publicView).
 
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 const os = require('os');
 const path = require('path');
 
@@ -384,11 +385,169 @@ function publicView(p) {
   };
 }
 
+// ---------- dòng thời gian (data/account-log.json) ----------
+
+// { v: 1, entries: [{ t, id, reason, running? }] tăng dần theo t, conflict: null | { fileId, chosenId, since } }
+function readLog() {
+  const o = readObject(paths().logFile);
+  const entries = Array.isArray(o.entries) ? o.entries.filter((e) => isObj(e) && Number.isFinite(e.t) && isStr(e.id)) : [];
+  entries.sort((a, b) => a.t - b.t);   // sort ổn định: mục trùng t giữ nguyên thứ tự
+  return { v: 1, entries, conflict: isObj(o.conflict) ? o.conflict : null };
+}
+
+function writeLog(log) {
+  writeAtomic(paths().logFile, JSON.stringify(log, null, 2));
+}
+
+// Chèn giữ entries tăng theo t (mục trùng t đứng sau mục cũ). "Giữ F" có thể chèn t nhỏ hơn mục cuối.
+function addEntry(log, entry) {
+  let i = log.entries.length;
+  while (i > 0 && log.entries[i - 1].t > entry.t) i--;
+  log.entries.splice(i, 0, entry);
+  return log;
+}
+
+// id của tài khoản đang được chọn = mục cuối.
+const chosenId = (log) => (log.entries.length ? log.entries[log.entries.length - 1].id : null);
+
+// ---------- tìm tiến trình Claude Code đang chạy ----------
+
+const DESKTOP_APP_RE = /[\\/]windowsapps[\\/]|[\\/]anthropicclaude[\\/]|\.app[\\/]contents[\\/]/i;   // ứng dụng Claude desktop
+const NPM_CLI_RE = /@anthropic-ai[\\/]claude-code/i;
+const RUNTIMES = new Set(['node', 'node.exe', 'bun', 'bun.exe']);
+
+// Từ đầu của command line (có thể đặt trong dấu nháy kép).
+function firstToken(cmd) {
+  const c = String(cmd || '').trim();
+  const m = /^"([^"]*)"/.exec(c) || /^(\S+)/.exec(c);
+  return m ? m[1] : '';
+}
+
+// Claude Code = claude(.exe) không phải ứng dụng Claude desktop (cũng tên Claude.exe, nằm trong WindowsApps,
+// các tiến trình con Electron có --type=...), hoặc node/bun chạy @anthropic-ai/claude-code.
+function isClaudeCodeProcess({ name, path: exePath, cmd } = {}) {
+  const n = String(name || '').toLowerCase();
+  const command = String(cmd || '');
+  if (n === 'claude.exe' || n === 'claude') {
+    if (DESKTOP_APP_RE.test(exePath || firstToken(command))) return false;   // ExecutablePath có thể null
+    return !/\s--type=/.test(command);
+  }
+  return RUNTIMES.has(n) && NPM_CLI_RE.test(command);
+}
+
+// Get-CimInstance trả một object (không phải mảng) khi chỉ có một kết quả.
+function parseWindowsProcesses(text, selfPid) {
+  if (!String(text).trim()) return [];
+  const data = JSON.parse(text);
+  const rows = Array.isArray(data) ? data : [data];
+  return rows
+    .filter((r) => isObj(r) && r.ProcessId !== selfPid
+      && isClaudeCodeProcess({ name: r.Name, path: r.ExecutablePath, cmd: r.CommandLine }))
+    .map((r) => ({ pid: r.ProcessId, cmd: r.CommandLine || r.ExecutablePath || '' }));
+}
+
+function parsePsProcesses(text, selfPid) {
+  const list = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(.+)$/.exec(line);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    const cmd = m[2];
+    const name = firstToken(cmd).split(/[\\/]/).pop();
+    if (pid !== selfPid && isClaudeCodeProcess({ name, cmd })) list.push({ pid, cmd });
+  }
+  return list;
+}
+
+// -> { ok, list }. Không bao giờ ném: lỗi -> { ok: false, list: [] } (switchTo chỉ cảnh báo, không chặn).
+function findClaudeProcesses() {
+  try {
+    const opts = { encoding: 'utf8', timeout: 8000, windowsHide: true, maxBuffer: 64 * 1024 * 1024 };
+    if (process.platform === 'win32') {
+      const out = execFileSync('powershell', ['-NoProfile', '-Command',
+        'Get-CimInstance Win32_Process | Select ProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress'], opts);
+      return { ok: true, list: parseWindowsProcesses(out, process.pid) };
+    }
+    return { ok: true, list: parsePsProcesses(execFileSync('ps', ['-eo', 'pid,args'], opts), process.pid) };
+  } catch {
+    return { ok: false, list: [] };
+  }
+}
+
+// ---------- đổi tài khoản ----------
+
+// Lưu đăng nhập hiện tại vào hồ sơ của login.id (giữ name cũ). Không đăng nhập -> null.
+function snapshot(login, now) {
+  if (!login || !login.id) return null;
+  const p = profileFromLogin(login, loadProfile(login.id), now);
+  saveProfile(p);
+  return p;
+}
+
+const SWITCH_TRIES = 3;
+const SWITCH_RETRY_MS = 200;
+
+// Đổi tài khoản theo 10 bước ở mục 5.2 của spec. opts.write chỉ để test (mặc định writeLogin).
+function switchTo(query, { now = Date.now(), processes, write = writeLogin } = {}) {
+  const findProcs = processes || (process.env.TT_SKIP_PROCESS_CHECK === '1' ? () => ({ ok: true, list: [] }) : findClaudeProcesses);
+  return withLock(() => {
+    const login = readLogin();                                    // bước 2 (ném FORMAT nếu lạ)
+    const target = resolve(query, listProfiles());
+    snapshot(login, now);                                         // bước 3
+    if (login.id === target.id) {                                 // bước 4
+      return { ok: true, from: login.id, to: target.id, already: true, running: [], checked: false };
+    }
+    const o = target.oauth;
+    if (!isObj(o) || !isStr(o.accessToken) || !isStr(o.refreshToken)) {
+      throw new AccountError('NO_TOKEN', `Hồ sơ "${target.name}" không có token đăng nhập, hãy /login lại rồi lưu`);
+    }
+    let procs;                                                    // bước 5 (chỉ cảnh báo, không chặn)
+    try { procs = findProcs(); } catch { procs = null; }
+    const checked = !!(procs && procs.ok);
+    const running = checked && Array.isArray(procs.list) ? procs.list : [];
+
+    const prefix = backup(now);                                   // bước 6
+    // Trả hai file về bản trước khi đổi rồi ném lỗi gốc (restore lỗi thì ném lỗi của restore).
+    const rollback = (cause) => {
+      try { restore(prefix); } catch (e) {
+        throw new AccountError('WRITE_FAILED', `Đổi tài khoản lỗi và không khôi phục được bản sao lưu ${prefix}: ${e.message}`, { cause: e });
+      }
+      throw cause;
+    };
+    const asWriteFailed = (e, msg) => (e instanceof AccountError && e.code === 'WRITE_FAILED'
+      ? e : new AccountError('WRITE_FAILED', `${msg}: ${e.message}`, { cause: e }));
+
+    let lastErr = null;                                           // bước 7-8
+    for (let attempt = 1; attempt <= SWITCH_TRIES; attempt++) {
+      try {
+        write(target);
+        if (readLogin().id === target.id) { lastErr = null; break; }
+        lastErr = new AccountError('WRITE_FAILED', 'Ghi xong nhưng đọc lại vẫn không phải tài khoản đích');
+      } catch (e) { lastErr = e; }
+      if (attempt < SWITCH_TRIES) sleepSync(SWITCH_RETRY_MS);
+    }
+    if (lastErr) rollback(asWriteFailed(lastErr, 'Không đổi được tài khoản'));
+
+    try {                                                         // bước 9
+      const log = readLog();
+      addEntry(log, { t: now, id: target.id, reason: 'switch', ...(checked ? { running: running.length } : {}) });
+      log.conflict = null;
+      writeLog(log);
+    } catch (e) {
+      rollback(asWriteFailed(e, 'Không ghi được dòng thời gian'));
+    }
+    return { ok: true, from: login.id, to: target.id, running, checked };   // bước 10 (withLock nhả khoá)
+  }, now);
+}
+
 module.exports = {
   AccountError, paths, readLogin, profileFromLogin,
   listProfiles, loadProfile, saveProfile, deleteProfile,
   uniqueName, resolve, writeLogin, backup, restore,
   withLock, isLocked, publicView,
+  readLog, writeLog, addEntry, chosenId,
+  isClaudeCodeProcess, findClaudeProcesses, parseWindowsProcesses, parsePsProcesses,
+  snapshot, switchTo,
 };
 
-// (Các hàm đổi tài khoản, đồng bộ và khối CLI sẽ được thêm ở các task sau.)
+// (Đồng bộ và khối CLI sẽ được thêm ở các task sau.)
