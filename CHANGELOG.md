@@ -1,5 +1,10 @@
 # Thay đổi
 
+## v1.0.1 — 2026-10-05
+
+- Cập nhật nhanh hơn: dashboard 10 giây, icon khay 15 giây, % hạn mức của tài khoản đang dùng mỗi phút
+  (tài khoản khác vẫn 5 phút).
+
 ## v1.0.0 — 2026-10-05
 
 Bản phát hành đầu tiên.
