@@ -250,6 +250,50 @@ test('backup: sắp xếp theo số, không theo chuỗi (999 < 1000)', () => {
   });
 });
 
+test('backup: ghi nhận file vắng, restore xoá lại file mới sinh ra', () => {
+  withEnv(({ dir }) => {
+    const { credFile, claudeJson } = A.paths();
+    // chỉ có .claude.json, chưa có .credentials.json
+    writeLoginFiles(dir, fakeAccount(1));
+    fs.unlinkSync(credFile);
+    const origCfg = readText(claudeJson);
+    const prefix = A.backup(1000);
+    A.writeLogin(profileOf(fakeAccount(2)));
+    assert.ok(fs.existsSync(credFile));
+    A.restore(prefix);
+    assert.ok(!fs.existsSync(credFile), 'credentials phải vắng lại');
+    assert.equal(readText(claudeJson), origCfg);
+    // cả hai vắng
+    fs.unlinkSync(claudeJson);
+    const p2 = A.backup(2000);
+    writeLoginFiles(dir, fakeAccount(2));
+    A.restore(p2);
+    assert.ok(!fs.existsSync(credFile) && !fs.existsSync(claudeJson));
+    // cùng mốc thời gian, lần sau file đã có -> dấu vắng cũ không được làm restore xoá file
+    writeLoginFiles(dir, fakeAccount(1));
+    const keep = readText(credFile);
+    const p3 = A.backup(2000);
+    fs.writeFileSync(credFile, '{}');
+    A.restore(p3);
+    assert.equal(readText(credFile), keep);
+  });
+});
+
+test('backup: không bao giờ xoá cặp vừa ghi dù mốc cũ hơn 5 cặp mới nhất', () => {
+  withEnv(({ dir }) => {
+    writeLoginFiles(dir, fakeAccount(1));
+    for (const t of [4000, 5000, 6000, 7000, 8000, 9000]) A.backup(t);
+    const prefix = A.backup(10);
+    assert.ok(fs.existsSync(`${prefix}-credentials.json`));
+    assert.ok(fs.existsSync(`${prefix}-claude.json`));
+    A.restore(prefix); // dùng được
+    // cặp cũ hơn khác vẫn bị dọn
+    const names = fs.readdirSync(A.paths().backupDir);
+    assert.ok(!names.some((n) => n.startsWith('4000-')));
+    assert.ok(names.some((n) => n.startsWith('5000-')));
+  });
+});
+
 test('withLock: lồng nhau -> LOCKED, luôn thả khoá', () => {
   withEnv(() => {
     const out = A.withLock(() => {
@@ -283,10 +327,42 @@ test('withLock: khoá hết hạn (quá 30 giây hoặc PID chết) bị bỏ qu
     fs.writeFileSync(lockFile, JSON.stringify({ pid: 999999, t: now }));
     assert.equal(A.isLocked(now), false);
     assert.equal(A.withLock(() => 'b', now), 'b');
-    // file khoá hỏng
-    fs.writeFileSync(lockFile, 'rác');
-    assert.equal(A.isLocked(now), false);
-    assert.equal(A.withLock(() => 'c', now), 'c');
+  });
+});
+
+test('withLock: file khoá chưa đọc được (rỗng/hỏng) còn hiệu lực cho tới khi mtime quá 30 giây', () => {
+  withEnv(() => {
+    const { lockFile, profilesDir } = A.paths();
+    fs.mkdirSync(profilesDir, { recursive: true });
+    for (const content of ['', 'rác']) {
+      // mtime mới: tiến trình khác vừa tạo file, chưa kịp ghi nội dung -> không được tranh khoá
+      fs.writeFileSync(lockFile, content);
+      assert.equal(A.isLocked(), true);
+      throwsCode(() => A.withLock(() => 1), 'LOCKED');
+      assert.ok(fs.existsSync(lockFile), 'không được xoá khoá đang hiệu lực');
+      assert.equal(fs.readFileSync(lockFile, 'utf8'), content);
+      // mtime cũ hơn 30 giây -> mồ côi
+      const old = new Date(Date.now() - 31000);
+      fs.utimesSync(lockFile, old, old);
+      assert.equal(A.isLocked(), false);
+      assert.equal(A.withLock(() => 'c'), 'c');
+    }
+  });
+});
+
+test('withLock: dọn khoá cũ không để lại file .stale và không xoá nhầm khoá mới', () => {
+  withEnv(() => {
+    const { lockFile, profilesDir } = A.paths();
+    fs.mkdirSync(profilesDir, { recursive: true });
+    fs.writeFileSync(lockFile, JSON.stringify({ pid: 999999, t: Date.now() }));
+    assert.equal(A.withLock(() => 'x'), 'x');
+    assert.deepEqual(fs.readdirSync(profilesDir).filter((f) => f.includes('.stale')), []);
+    // khoá còn hiệu lực bị "bắt nhầm" bên trong lúc dọn phải được trả lại nguyên vẹn
+    const live = JSON.stringify({ pid: process.pid, t: Date.now() });
+    fs.writeFileSync(lockFile, live);
+    throwsCode(() => A.withLock(() => 1), 'LOCKED');
+    assert.equal(fs.readFileSync(lockFile, 'utf8'), live);
+    assert.deepEqual(fs.readdirSync(profilesDir).filter((f) => f.includes('.stale')), []);
   });
 });
 

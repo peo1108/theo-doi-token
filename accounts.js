@@ -234,40 +234,62 @@ function writeLogin(profile) {
 
 // ---------- sao lưu ----------
 
-// Chép hai file vào backupDir/<now>-credentials.json / <now>-claude.json, giữ 5 cặp gần nhất.
+const BACKUP_PARTS = [['credFile', 'credentials'], ['claudeJson', 'claude']];
+
+// Chép hai file vào backupDir/<now>-credentials.json / <now>-claude.json, giữ 5 cặp gần nhất
+// (không bao giờ xoá cặp vừa ghi). File không tồn tại lúc sao lưu được ghi nhận bằng
+// <now>-<tên>.absent để restore xoá lại file mới sinh ra.
 // Trả về tiền tố (đường dẫn không kèm hậu tố) để restore.
 function backup(now) {
   const p = paths();
   fs.mkdirSync(p.backupDir, { recursive: true });
   const prefix = path.join(p.backupDir, String(now));
-  for (const [src, suffix] of [[p.credFile, 'credentials'], [p.claudeJson, 'claude']]) {
-    try { fs.copyFileSync(src, `${prefix}-${suffix}.json`); } catch (e) {
+  for (const [key, suffix] of BACKUP_PARTS) {
+    const src = p[key];
+    const copy = `${prefix}-${suffix}.json`;
+    const marker = `${prefix}-${suffix}.absent`;
+    try {
+      fs.copyFileSync(src, copy);
+      try { fs.unlinkSync(marker); } catch {}
+    } catch (e) {
       if (e.code !== 'ENOENT') throw new AccountError('WRITE_FAILED', `Không sao lưu được ${path.basename(src)}: ${e.message}`, { cause: e });
+      try { fs.unlinkSync(copy); } catch {}
+      try { fs.writeFileSync(marker, ''); } catch (e2) {
+        throw new AccountError('WRITE_FAILED', `Không ghi được dấu sao lưu: ${e2.message}`, { cause: e2 });
+      }
     }
   }
   const stamps = new Set();
   for (const n of fs.readdirSync(p.backupDir)) {
-    const m = /^(\d+)-(credentials|claude)\.json$/.exec(n);
+    const m = /^(\d+)-(credentials|claude)\.(json|absent)$/.exec(n);
     if (m) stamps.add(m[1]);
   }
-  const old = [...stamps].sort((a, b) => Number(b) - Number(a)).slice(BACKUP_KEEP);
+  const old = [...stamps].sort((a, b) => Number(b) - Number(a)).slice(BACKUP_KEEP).filter((s) => s !== String(now));
   for (const s of old) {
-    for (const suffix of ['credentials', 'claude']) {
-      try { fs.unlinkSync(path.join(p.backupDir, `${s}-${suffix}.json`)); } catch {}
+    for (const [, suffix] of BACKUP_PARTS) {
+      for (const ext of ['json', 'absent']) {
+        try { fs.unlinkSync(path.join(p.backupDir, `${s}-${suffix}.${ext}`)); } catch {}
+      }
     }
   }
   return prefix;
 }
 
-// Khôi phục hai file từ bản sao lưu (tiền tố do backup trả về).
+// Khôi phục hai file từ bản sao lưu (tiền tố do backup trả về); file vắng lúc sao lưu thì bị xoá.
 function restore(prefix) {
   const p = paths();
   let found = 0;
-  for (const [dst, suffix] of [[p.credFile, 'credentials'], [p.claudeJson, 'claude']]) {
+  for (const [key, suffix] of BACKUP_PARTS) {
+    const dst = p[key];
     let text;
     try { text = fs.readFileSync(`${prefix}-${suffix}.json`, 'utf8'); } catch (e) {
-      if (e.code === 'ENOENT') continue;
-      throw new AccountError('WRITE_FAILED', `Không đọc được bản sao lưu: ${e.message}`, { cause: e });
+      if (e.code !== 'ENOENT') throw new AccountError('WRITE_FAILED', `Không đọc được bản sao lưu: ${e.message}`, { cause: e });
+      if (!fs.existsSync(`${prefix}-${suffix}.absent`)) continue;
+      try { fs.unlinkSync(dst); } catch (e2) {
+        if (e2.code !== 'ENOENT') throw new AccountError('WRITE_FAILED', `Không xoá được ${path.basename(dst)}: ${e2.message}`, { cause: e2 });
+      }
+      found++;
+      continue;
     }
     writeAtomic(dst, text);
     found++;
@@ -282,16 +304,40 @@ function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
-// Khoá còn hiệu lực = đọc được { pid, t }, chưa quá 30 giây và tiến trình giữ khoá còn sống.
-function lockActive(now) {
-  let l;
-  try { l = JSON.parse(fs.readFileSync(paths().lockFile, 'utf8')); } catch { return false; }
-  if (!isObj(l) || typeof l.t !== 'number') return false;
+// File khoá còn hiệu lực = đọc được { pid, t }, chưa quá 30 giây và tiến trình giữ khoá còn sống.
+// File chưa đọc được (đang được tạo dở, hoặc hỏng) coi là còn hiệu lực cho tới khi mtime quá 30 giây,
+// để không tranh khoá của tiến trình vừa tạo file nhưng chưa kịp ghi nội dung.
+function lockFileActive(file, now) {
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return false; }   // không có file = không có khoá
+  let l = null;
+  try { l = JSON.parse(text); } catch {}
+  if (!isObj(l) || typeof l.t !== 'number') {
+    try { return Date.now() - fs.statSync(file).mtimeMs <= LOCK_TTL_MS; } catch { return false; }
+  }
   return now - l.t <= LOCK_TTL_MS && pidAlive(l.pid);
 }
 
+const lockActive = (now) => lockFileActive(paths().lockFile, now);
+
 function isLocked(now = Date.now()) {
-  return fs.existsSync(paths().lockFile) && lockActive(now);
+  return lockActive(now);
+}
+
+// Dọn khoá cũ: đổi tên sang file riêng (atomic) rồi mới kiểm tra lại, để không xoá nhầm khoá mới
+// của tiến trình khác vừa tạo xen vào giữa. Trả true nếu khoá đã được dọn (hoặc đã biến mất).
+function reclaimStale(now) {
+  const { lockFile } = paths();
+  const aside = `${lockFile}.${process.pid}.${Math.random().toString(36).slice(2)}.stale`;
+  try { fs.renameSync(lockFile, aside); } catch { return true; }   // ai đó đã dọn trước
+  if (!lockFileActive(aside, now)) {
+    try { fs.unlinkSync(aside); } catch {}
+    return true;
+  }
+  // Bắt nhầm khoá còn hiệu lực: trả lại (linkSync không ghi đè nếu đã có khoá khác).
+  try { fs.linkSync(aside, lockFile); } catch {}
+  try { fs.unlinkSync(aside); } catch {}
+  return false;
 }
 
 // Chạy fn khi giữ khoá; khoá đang có hiệu lực -> LOCKED. Luôn thả khoá khi xong.
@@ -306,8 +352,7 @@ function withLock(fn, now = Date.now()) {
       got = true;
     } catch (e) {
       if (e.code !== 'EEXIST') throw new AccountError('WRITE_FAILED', `Không tạo được khoá: ${e.message}`, { cause: e });
-      if (lockActive(now)) break;
-      try { fs.unlinkSync(lockFile); } catch {}   // khoá cũ/mồ côi -> dọn rồi thử lại
+      if (lockActive(now) || !reclaimStale(now)) break;
     }
   }
   if (!got) throw new AccountError('LOCKED', 'Đang có thao tác đổi tài khoản khác');
