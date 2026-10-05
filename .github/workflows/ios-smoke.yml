@@ -1,8 +1,12 @@
 name: iOS smoke (Simulator)
 
-# Chạy tay: build cho Simulator, dựng server giả (remote.js + claude giả), mở các màn hình và chụp ảnh.
+# Chạy tay (hoặc khi sửa chính file này): build cho Simulator, dựng server giả (remote.js + claude giả), mở các màn hình và chụp ảnh.
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/ios-smoke.yml"
+      - "ios/tools/smoke-server.js"
 
 jobs:
   smoke:
