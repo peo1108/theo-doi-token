@@ -95,6 +95,18 @@ jobs:
           xcrun simctl terminate "$UDID" vn.peo.ccremote || true
           xcrun simctl launch "$UDID" vn.peo.ccremote -openSession "$(j chat)" -draft "/co"
           shot 11-commands 5
+          open_s ide
+          shot 12-vscode 5
+          xcrun simctl ui "$UDID" appearance dark
+          open_s ide
+          shot 13-vscode-dark 5
+          xcrun simctl ui "$UDID" appearance light
+          xcrun simctl terminate "$UDID" vn.peo.ccremote || true
+          xcrun simctl launch "$UDID" vn.peo.ccremote
+          shot 14-home-projects 5
+          xcrun simctl terminate "$UDID" vn.peo.ccremote || true
+          xcrun simctl launch "$UDID" vn.peo.ccremote -openProject "$(j work)"
+          shot 15-project 5
           cat "$RUNNER_TEMP/server.log"
 
       - name: Upload screenshots

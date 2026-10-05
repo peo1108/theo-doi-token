@@ -19,6 +19,13 @@ struct SessionSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if model.summary?.external == true {
+                    Section {
+                        Label("Phiên này đang chạy trên \(model.summary?.source ?? "máy tính"). Model, effort, quyền đổi ngay trong VS Code; ở đây chỉ áp dụng khi phiên được mở lại từ điện thoại.", systemImage: "laptopcomputer")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 Section("Model") {
                     Picker(selection: binding(\.modelValue, "") { ["model": $0] }) {
                         ForEach(models) { m in

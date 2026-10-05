@@ -46,7 +46,13 @@ struct HomeView: View {
                 }
             }
 
-            if let recent = app.state?.recent, !recent.isEmpty {
+            if let projects = app.state?.projects, !projects.isEmpty {
+                Section("Dự án") {
+                    ForEach(projects) { p in
+                        NavigationLink(value: Route.project(p.cwd)) { ProjectRow(project: p) }
+                    }
+                }
+            } else if let recent = app.state?.recent, !recent.isEmpty {
                 Section("Gần đây") {
                     ForEach(recent) { r in
                         NavigationLink(value: Route.session(r.id)) { RecentRow(session: r) }
@@ -206,6 +212,12 @@ struct LiveRow: View {
             HStack(spacing: 6) {
                 Image(systemName: "folder").font(.caption2)
                 Text(session.project ?? "").font(.caption)
+                if session.external == true {
+                    Label(session.attached == true ? "\(session.source ?? "Máy tính") · đã gắn" : session.source ?? "Máy tính",
+                          systemImage: "laptopcomputer")
+                        .font(.caption)
+                        .foregroundStyle(session.attached == true ? Color.accentColor : Color.secondary)
+                }
                 if session.pending > 0 {
                     Text("· \(session.pending) chờ duyệt").font(.caption.bold()).foregroundStyle(.orange)
                 }

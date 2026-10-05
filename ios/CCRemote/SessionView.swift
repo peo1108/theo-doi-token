@@ -91,13 +91,47 @@ struct SessionView: View {
     }
 
     @ViewBuilder private var banner: some View {
-        if let err = model.lastError {
-            Label(err, systemImage: model.connected ? "exclamationmark.triangle" : "wifi.exclamationmark")
-                .font(.footnote)
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(Color.red.opacity(0.85))
+        VStack(spacing: 0) {
+            if let err = model.lastError {
+                Label(err, systemImage: model.connected ? "exclamationmark.triangle" : "wifi.exclamationmark")
+                    .font(.footnote)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Color.red.opacity(0.85))
+            }
+            externalBar
+        }
+    }
+
+    /// Phiên đang mở trên máy (VS Code / terminal): điều khiển qua hook.
+    @ViewBuilder private var externalBar: some View {
+        if let s = model.summary, s.external == true {
+            let src = s.source ?? "Máy tính"
+            let attached = s.attached == true
+            HStack(spacing: 10) {
+                Image(systemName: src == "Terminal" ? "terminal" : "laptopcomputer")
+                    .foregroundStyle(attached ? Color.accentColor : Color.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(!attached ? "\(src) · đang mở trên máy tính"
+                         : s.ready == true ? "\(src) · đang chờ lệnh từ điện thoại"
+                         : s.status == "running" ? "\(src) · Claude đang làm…" : "\(src) · đã gắn điện thoại")
+                        .font(.footnote.weight(.semibold))
+                    Text(!attached ? "Bấm Điều khiển rồi gõ /phone trong VS Code (hoặc chờ Claude xong lượt đang làm)"
+                         : s.ready == true ? "Gửi tin là Claude trên máy làm tiếp ngay"
+                         : "Tin gửi lúc này sẽ vào khi Claude xong lượt")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Button(attached ? "Thả về máy" : "Điều khiển") {
+                    act { await model.attach(!attached, api: $0) }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(.bar)
         }
     }
 
@@ -174,36 +208,45 @@ struct EventRow: View {
     var body: some View {
         switch event.kind {
         case "user":
-            HStack {
-                Spacer(minLength: 40)
+            // giống ô lời nhắn trong VS Code: khung viền, cả chiều ngang
+            VStack(alignment: .leading, spacing: 3) {
+                if event.via == "phone" {
+                    Label("từ điện thoại", systemImage: "iphone").font(.caption2).foregroundStyle(.secondary)
+                }
                 Text(event.text ?? "")
+                    .font(.callout)
                     .textSelection(.enabled)
-                    .padding(.horizontal, 13).padding(.vertical, 9)
-                    .foregroundStyle(.white)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.vertical, 9)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
             }
+            .padding(.top, 8)
         case "assistant":
-            MarkdownText(text: event.text ?? "")
+            TimelineRow(color: Color.secondary.opacity(0.55)) { MarkdownText(text: event.text ?? "") }
         case "tool":
-            ToolRow(event: event, result: event.toolId.flatMap { model.toolResults[$0] }, live: model.summary?.live == true)
+            let result = event.toolId.flatMap { model.toolResults[$0] }
+            TimelineRow(color: toolColor(result)) {
+                ToolRow(event: event, result: result, live: model.summary?.live == true)
+            }
         case "permission":
-            PermissionCard(event: event, decision: event.requestId.flatMap { model.decisions[$0] }) { decision, answers in
-                guard let api = app.api, let rid = event.requestId else { return }
-                Task { await model.decide(rid, decision, answers: answers, api: api) }
+            TimelineRow(color: .orange) {
+                PermissionCard(event: event, decision: event.requestId.flatMap { model.decisions[$0] }) { decision, answers in
+                    guard let api = app.api, let rid = event.requestId else { return }
+                    Task { await model.decide(rid, decision, answers: answers, api: api) }
+                }
             }
         case "result":
-            ResultRow(event: event)
+            ResultRow(event: event).padding(.leading, 20)
         case "limit":
             LimitCard(event: event, sessionId: model.id)
         case "error":
-            Label(event.text ?? "Lỗi", systemImage: "xmark.octagon")
-                .font(.footnote)
-                .foregroundStyle(.red)
-                .textSelection(.enabled)
+            TimelineRow(color: .red) {
+                Text(event.text ?? "Lỗi").font(.footnote).foregroundStyle(.red).textSelection(.enabled)
+            }
         case "output":
-            VStack(alignment: .leading, spacing: 4) {
-                Label("Kết quả lệnh", systemImage: "terminal").font(.caption).foregroundStyle(.secondary)
-                CodeBlock(text: event.text ?? "", tint: event.error == true ? .red : nil)
+            TimelineRow(color: Color.secondary.opacity(0.55)) {
+                InOutBlock(input: nil, output: event.text, outputError: event.error == true, outputLines: nil)
             }
         case "note":
             Text(event.text ?? "")
@@ -214,74 +257,101 @@ struct EventRow: View {
             EmptyView()
         }
     }
+
+    private func toolColor(_ r: Event?) -> Color {
+        guard let r else { return model.summary?.live == true ? .blue : .gray }
+        return r.error == true ? .red : .green
+    }
 }
 
+/// Một lần gọi tool, giống VS Code: "Bash  mô tả" + khung IN/OUT, "Edit  đường dẫn" + diff, bấm để xem đủ.
 struct ToolRow: View {
     let event: Event
     let result: Event?
     let live: Bool
     @State private var open = false
 
+    private var name: String { event.name ?? "Tool" }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
                 withAnimation(.easeOut(duration: 0.15)) { open.toggle() }
             } label: {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: icon)
-                        .font(.caption)
-                        .frame(width: 18)
-                        .foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(event.name ?? "Tool").font(.caption.weight(.semibold))
-                        Text(event.summary ?? "")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(open ? nil : 2)
-                            .multilineTextAlignment(.leading)
-                    }
-                    Spacer(minLength: 4)
-                    stateIcon
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Text(name).font(.callout.weight(.semibold)).foregroundStyle(.primary)
+                    Text(headline)
+                        .font(event.path != nil ? .footnote.monospaced() : .footnote)
+                        .foregroundStyle(event.path != nil ? Color.blue : Color.secondary)
+                        .lineLimit(open ? 4 : 1)
+                        .truncationMode(.middle)
+                        .multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                    if result == nil && live { ProgressView().controlSize(.mini) }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            if open {
-                if let input = event.input, !input.isEmpty, input != "{}" {
-                    CodeBlock(text: input)
-                }
-                if let r = result?.text, !r.isEmpty {
-                    CodeBlock(text: r, tint: result?.error == true ? .red : nil)
-                }
+            if let sub = subline {
+                Text(sub).font(.caption).foregroundStyle(.secondary)
+            }
+            detail
+        }
+    }
+
+    private var headline: String {
+        if let p = event.path { return p }
+        if let t = event.title, !t.isEmpty { return t }
+        return event.summary ?? ""
+    }
+
+    /// dòng phụ dưới tiêu đề (vd. "Thêm 3 dòng, bớt 1 dòng" cho Edit, mô tả khi đã có đường dẫn)
+    private var subline: String? {
+        if let o = event.oldText ?? (event.newText != nil ? "" : nil), let n = event.newText {
+            let a = n.isEmpty ? 0 : n.components(separatedBy: "\n").count
+            let d = o.isEmpty ? 0 : o.components(separatedBy: "\n").count
+            var parts: [String] = []
+            if a > 0 { parts.append("Thêm \(a) dòng") }
+            if d > 0 { parts.append("bớt \(d) dòng") }
+            if let t = event.title { parts.append(t) }
+            return parts.isEmpty ? nil : parts.joined(separator: ", ")
+        }
+        if event.path != nil, let t = event.title, !t.isEmpty { return t }
+        return nil
+    }
+
+    private var outText: String? {
+        guard let r = result?.text, !r.isEmpty else { return nil }
+        return r
+    }
+
+    @ViewBuilder private var detail: some View {
+        switch name {
+        case "Edit", "MultiEdit":
+            if event.oldText != nil || event.newText != nil {
+                DiffBlock(old: event.oldText ?? "", new: event.newText ?? "", maxLines: open ? 200 : 10)
+            }
+            if result?.error == true, let o = outText { errorText(o) }
+        case "Bash", "PowerShell":
+            InOutBlock(input: event.code ?? event.summary, output: outText, outputError: result?.error == true, outputLines: open ? nil : 6)
+        case "Write":
+            if let c = event.code { CodeBlock(text: c, maxLines: open ? nil : 8) }
+            if result?.error == true, let o = outText { errorText(o) }
+        case "TodoWrite":
+            if let c = event.code { CodeBlock(text: c) }
+        default:
+            if let c = event.code, open { CodeBlock(text: c, maxLines: nil) }
+            if result?.error == true, let o = outText {
+                errorText(o)
+            } else if open, let o = outText {
+                InOutBlock(input: nil, output: o, outputLines: nil)
             }
         }
-        .padding(10)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    @ViewBuilder private var stateIcon: some View {
-        if let result {
-            Image(systemName: result.error == true ? "xmark.circle.fill" : "checkmark.circle.fill")
-                .foregroundStyle(result.error == true ? Color.red : Color.green)
-                .font(.caption)
-        } else if live {
-            ProgressView().controlSize(.mini)
-        }
-    }
-
-    private var icon: String {
-        switch event.name ?? "" {
-        case "Bash", "PowerShell": return "terminal"
-        case "Read": return "doc.text"
-        case "Write": return "square.and.pencil"
-        case "Edit", "MultiEdit", "NotebookEdit": return "pencil"
-        case "Grep", "Glob": return "magnifyingglass"
-        case "WebFetch", "WebSearch": return "globe"
-        case "Task", "Agent": return "person.2"
-        case "TodoWrite": return "checklist"
-        default: return "wrench.and.screwdriver"
-        }
+    private func errorText(_ s: String) -> some View {
+        Text(s).font(.caption.monospaced()).foregroundStyle(.red).lineLimit(open ? nil : 4).textSelection(.enabled)
     }
 }
 
@@ -497,73 +567,5 @@ struct LimitCard: View {
         }
         .padding(12)
         .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
-    }
-}
-
-// MARK: - Markdown đơn giản: khối ``` thành code, tiêu đề # thành chữ đậm, phần còn lại markdown inline.
-
-struct MarkdownText: View {
-    let text: String
-
-    private enum Block { case text(String), code(String) }
-
-    private var blocks: [Block] {
-        var out: [Block] = []
-        var buf: [String] = []
-        var inCode = false
-        for line in text.components(separatedBy: "\n") {
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                let chunk = buf.joined(separator: "\n")
-                if inCode { out.append(.code(chunk)) } else if !chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out.append(.text(chunk)) }
-                buf = []
-                inCode.toggle()
-                continue
-            }
-            if !inCode, let h = line.range(of: "^#{1,6} ", options: .regularExpression) {
-                buf.append("**" + line[h.upperBound...] + "**")
-            } else {
-                buf.append(line)
-            }
-        }
-        let rest = buf.joined(separator: "\n")
-        if inCode { out.append(.code(rest)) } else if !rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out.append(.text(rest)) }
-        return out
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, b in
-                switch b {
-                case .text(let s):
-                    Text(Self.attributed(s))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                case .code(let s):
-                    CodeBlock(text: s)
-                }
-            }
-        }
-    }
-
-    static func attributed(_ s: String) -> AttributedString {
-        let opts = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: s, options: opts)) ?? AttributedString(s)
-    }
-}
-
-struct CodeBlock: View {
-    let text: String
-    var tint: Color? = nil
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            Text(text)
-                .font(.caption.monospaced())
-                .foregroundStyle(tint ?? Color.primary)
-                .textSelection(.enabled)
-                .padding(9)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
     }
 }

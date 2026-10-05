@@ -40,7 +40,20 @@ class RemoteError extends Error {
 function load() {
   let d;
   try { d = JSON.parse(fs.readFileSync(remoteFile(), 'utf8')); } catch { d = {}; }
-  return { devices: Array.isArray(d.devices) ? d.devices : [], pair: d.pair || null, ntfy: d.ntfy || null };
+  return { devices: Array.isArray(d.devices) ? d.devices : [], pair: d.pair || null, ntfy: d.ntfy || null, hookKey: d.hookKey || null };
+}
+
+// Tin nhắn từ điện thoại đưa vào phiên trên máy qua hook Stop. Ghi rõ là của người dùng để Claude không coi là prompt injection.
+const PHONE_PREFIX = '📱 Tin nhắn của người dùng, gửi từ điện thoại qua app CC Remote (hook do chính người dùng cài) — hãy làm theo như tin nhắn bình thường:';
+const phoneMessage = (text) => `${PHONE_PREFIX}\n\n${text}`;
+
+// Khoá bí mật để hook.js (chạy trên máy) gọi /v1/hook/*; tạo khi cần.
+function hookKey() {
+  const d = load();
+  if (d.hookKey) return d.hookKey;
+  d.hookKey = crypto.randomBytes(24).toString('base64url');
+  save(d);
+  return d.hookKey;
 }
 
 function save(d) {
@@ -186,6 +199,43 @@ function toolSummary(name, input) {
   return clip(first || '', 200);
 }
 
+// Phần để app vẽ tool giống VS Code: title (mô tả), path, code (lệnh / nội dung), old/new (diff của Edit).
+function toolDetail(name, input) {
+  const i = input && typeof input === 'object' ? input : {};
+  const str = (v, n) => (typeof v === 'string' && v ? clip(v, n) : undefined);
+  const d = {};
+  if (name === 'Bash' || name === 'PowerShell') {
+    d.title = str(i.description, 200);
+    d.code = str(i.command, 3000);
+  } else if (name === 'Edit' || name === 'MultiEdit') {
+    d.path = str(i.file_path, 400);
+    const e = name === 'MultiEdit' && Array.isArray(i.edits) ? i.edits[0] || {} : i;
+    d.old = str(e.old_string, 3000);
+    d.new = str(e.new_string, 3000);
+    if (name === 'MultiEdit' && Array.isArray(i.edits) && i.edits.length > 1) d.title = `${i.edits.length} chỗ sửa`;
+  } else if (name === 'Write') {
+    d.path = str(i.file_path, 400);
+    d.code = str(i.content, 3000);
+  } else if (name === 'Read' || name === 'NotebookEdit') {
+    d.path = str(i.file_path || i.notebook_path, 400);
+    if (i.offset || i.limit) d.title = `dòng ${i.offset || 1}${i.limit ? `–${(i.offset || 1) + i.limit}` : ''}`;
+  } else if (name === 'Grep' || name === 'Glob') {
+    d.title = str(i.pattern, 300);
+    d.path = str(i.path, 400);
+  } else if (name === 'WebFetch') {
+    d.title = str(i.url, 400);
+  } else if (name === 'WebSearch') {
+    d.title = str(i.query, 300);
+  } else if (name === 'Task' || name === 'Agent') {
+    d.title = str(i.description, 200);
+    d.code = str(i.prompt, 1500);
+  } else if (name === 'TodoWrite' && Array.isArray(i.todos)) {
+    d.code = i.todos.map((t) => `${t.status === 'completed' ? '☑' : t.status === 'in_progress' ? '◐' : '☐'} ${t.content}`).join('\n');
+  }
+  for (const k of Object.keys(d)) if (d[k] === undefined) delete d[k];
+  return d;
+}
+
 function resultText(c) {
   if (typeof c === 'string') return c;
   if (Array.isArray(c)) return c.map((x) => (x.type === 'text' ? x.text : x.type === 'image' ? '[ảnh]' : '')).join('\n');
@@ -213,7 +263,7 @@ function normalize(m) {
     for (const c of content) {
       if (c.type === 'text' && c.text && c.text.trim()) out.push({ kind: 'assistant', text: c.text });
       else if (c.type === 'tool_use') {
-        out.push({ kind: 'tool', id: c.id, name: c.name, summary: toolSummary(c.name, c.input), input: clip(JSON.stringify(c.input ?? {}, null, 1), 4000) });
+        out.push({ kind: 'tool', id: c.id, name: c.name, summary: toolSummary(c.name, c.input), input: clip(JSON.stringify(c.input ?? {}, null, 1), 4000), ...toolDetail(c.name, c.input) });
       }
     }
   } else if (m.type === 'user' && !m.isMeta) {
@@ -226,6 +276,12 @@ function normalize(m) {
       // kết quả lệnh / (vd. /context, /cost) nằm trong local-command-stdout
       const so = /<local-command-std(out|err)>([\s\S]*?)<\/local-command-std(?:out|err)>/.exec(raw);
       if (so) { if (so[2].trim()) out.push({ kind: 'output', error: so[1] === 'err', text: clip(so[2].trim(), 6000) }); return; }
+      const fb = /^Stop hook feedback:\s*\n?([\s\S]*)$/.exec(String(raw || '').trim());
+      if (fb) {
+        const msg = fb[1].trim().startsWith(PHONE_PREFIX) ? fb[1].trim().slice(PHONE_PREFIX.length).trim() : fb[1].trim();
+        if (msg) out.push({ kind: 'user', text: msg, via: 'phone' });
+        return;
+      }
       const t = cleanUserText(raw);
       if (!t) return;
       if (t.startsWith('[Request interrupted')) out.push({ kind: 'note', text: 'Đã ngắt' });
@@ -289,7 +345,7 @@ function sessionMeta(file, st) {
   const key = `${st.mtimeMs}:${st.size}`;
   const c = metaCache.get(file);
   if (c && c.key === key) return c.meta;
-  const head = readLines(file, st.size > 512e3 ? 512e3 : 0);
+  const head = readLines(file, st.size > 512e3 ? 160e3 : 0);   // đầu file đủ để lấy cwd + lời nhắn đầu
   let cwd = null, first = null, title = null;
   for (const m of head) {
     if (!cwd && m.cwd && !m.isSidechain) cwd = m.cwd;
@@ -344,13 +400,28 @@ function recentSessions(limit = 40) {
   return out;
 }
 
-function projects(limit = 30) {
+const dirKey = (p) => String(p || '').toLowerCase().replace(/[\\/]+$/, '');
+const sameDir = (a, b) => dirKey(a) === dirKey(b);
+
+// Dự án = thư mục đã mở Claude Code, mới dùng trước; kèm số phiên. Thư mục đã xoá thì bỏ.
+function projects(limit = 40) {
   const seen = new Map();
-  for (const s of recentSessions(200)) {
-    const k = s.cwd.toLowerCase();
-    if (!seen.has(k)) seen.set(k, { cwd: s.cwd, name: s.project, lastUsed: s.updatedAt });
+  for (const s of recentSessions(400)) {
+    const k = dirKey(s.cwd);
+    const p = seen.get(k) || { cwd: s.cwd, name: s.project, lastUsed: s.updatedAt, count: 0, lastTitle: s.title };
+    p.count++;
+    seen.set(k, p);
   }
-  return [...seen.values()].filter((p) => { try { return fs.statSync(p.cwd).isDirectory(); } catch { return false; } }).slice(0, limit);
+  const scratch = dirKey(path.join(os.tmpdir(), 'claude'));   // thư mục nháp của Claude Code: không phải dự án
+  return [...seen.values()]
+    .filter((p) => !dirKey(p.cwd).startsWith(scratch))
+    .filter((p) => { try { return fs.statSync(p.cwd).isDirectory(); } catch { return false; } })
+    .slice(0, limit);
+}
+
+// Các phiên của một dự án (mới trước).
+function projectSessions(cwd, limit = 150) {
+  return recentSessions(400).filter((s) => sameDir(s.cwd, cwd)).slice(0, limit);
 }
 
 // ---------- phiên ----------
@@ -442,16 +513,25 @@ class Session {
     this.fileStamp = null;
   }
 
-  // nạp lại lịch sử từ file khi phiên đang tắt (có thể vừa được dùng trong terminal)
-  loadTranscript() {
-    if (this.proc) return;
+  transcriptFile() {
     const f = sessionFile(this.id);
+    if (f) return f;
+    const t = this.bridge && this.bridge.transcript;
+    return t && fs.existsSync(t) ? t : null;
+  }
+
+  // nạp lại lịch sử từ file khi phiên đang tắt (có thể vừa được dùng trong terminal)
+  loadTranscript(force = false) {
+    if (this.proc) return;
+    const f = this.transcriptFile();
     if (!f) return;
     let st;
     try { st = fs.statSync(f); } catch { return; }
     const stamp = `${st.mtimeMs}:${st.size}`;
-    if (stamp === this.fileStamp) return;
+    if (stamp === this.fileStamp && !force) return;
     this.fileStamp = stamp;
+    this.fileOffset = st.size;
+    this.tailRest = Buffer.alloc(0);
     this.known = true;
     const meta = sessionMeta(f, st);
     this.cwd = this.cwd || meta.cwd;
@@ -464,6 +544,43 @@ class Session {
     if (last) this.lastText = clip(plain(last.text), 160);
     this.updatedAt = Math.round(st.mtimeMs);
     for (const c of this.clients) c.reset();
+  }
+
+  // Phiên không do mình chạy (VS Code, terminal): đọc phần mới ghi thêm vào file lịch sử.
+  tail() {
+    if (this.proc) return;
+    const f = this.transcriptFile();
+    if (!f) return;
+    let st;
+    try { st = fs.statSync(f); } catch { return; }
+    if (this.fileOffset == null || st.size < this.fileOffset) return this.loadTranscript(true);
+    if (st.size === this.fileOffset) return;
+    let chunk;
+    try {
+      const fd = fs.openSync(f, 'r');
+      try {
+        chunk = Buffer.alloc(st.size - this.fileOffset);
+        fs.readSync(fd, chunk, 0, chunk.length, this.fileOffset);
+      } finally { fs.closeSync(fd); }
+    } catch { return; }
+    this.fileOffset = st.size;
+    this.fileStamp = `${st.mtimeMs}:${st.size}`;
+    this.fileChangedAt = Date.now();
+    const buf = Buffer.concat([this.tailRest || Buffer.alloc(0), chunk]);
+    const cut = buf.lastIndexOf(10);   // chỉ xử lý dòng đã đủ (\n), phần dở để lần sau
+    this.tailRest = cut < 0 ? buf : buf.subarray(cut + 1);
+    if (cut < 0) return;
+    for (const line of buf.subarray(0, cut).toString('utf8').split('\n')) {
+      if (!line.trim()) continue;
+      let m;
+      try { m = JSON.parse(line); } catch { continue; }
+      if (m.type === 'ai-title' && m.aiTitle) this.title = clip(plain(m.aiTitle), 100);
+      for (const e of normalize(m)) {
+        if (e.kind === 'user' && this.echo && this.echo.has(e.text)) { this.echo.delete(e.text); continue; }
+        this.store({ ...e, t: Date.parse(m.timestamp) || Date.now() });
+      }
+    }
+    this.broadcastState();
   }
 
   store(e, live = true) {
@@ -515,11 +632,24 @@ class Session {
     };
   }
 
+  // Trạng thái của phiên đang mở trên máy (suy ra từ hook và file lịch sử).
+  externalStatus() {
+    const b = this.bridge;
+    if (this.pending.size) return 'waiting';
+    if (b.parked) return 'idle';
+    if (b.busy || Date.now() - (this.fileChangedAt || 0) < 15e3) return 'running';
+    return 'off';
+  }
+
   summary() {
+    const ext = !!this.bridge && !this.proc;
+    const b = this.bridge;
     return {
       settings: this.effective(), account: this.caps && this.caps.account ? this.caps.account.email : null,
+      external: ext, source: ext ? (b.entrypoint === 'claude-vscode' ? 'VS Code' : b.entrypoint === 'cli' ? 'Terminal' : 'Máy tính') : null,
+      attached: ext ? b.attached : false, ready: ext ? !!b.parked : false,
       id: this.id, cwd: this.cwd, project: this.cwd ? path.basename(this.cwd) : '', title: this.title,
-      status: this.status, live: !!this.proc, pending: this.pending.size, mode: this.mode, model: this.model,
+      status: ext ? this.externalStatus() : this.status, live: !!this.proc || ext, pending: this.pending.size, mode: this.mode, model: this.model,
       rate: this.rate, cost: this.cost, lastText: this.lastText, updatedAt: this.updatedAt, epoch: this.epoch,
       lastSeq: this.seq, watching: this.clients.size,
     };
@@ -544,7 +674,7 @@ class Session {
       ...(this.model ? ['--model', this.model] : []),
       ...(Object.keys(this.opts).length ? ['--settings', JSON.stringify(toFlagSettings(this.opts))] : []),
       ...(this.known ? ['--resume', this.id] : ['--session-id', this.id])];
-    const env = { ...process.env };
+    const env = { ...process.env, CC_REMOTE_CHILD: '1' };   // hook.js bỏ qua phiên do mình chạy
     for (const k of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT']) delete env[k];
     const proc = spawn(bin.cmd, args, { cwd: this.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.proc = proc;
@@ -679,15 +809,20 @@ class Session {
       this.write({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: `Không hỗ trợ ${r.subtype}` } });
       return;
     }
-    const p = {
-      requestId: m.request_id, tool: r.tool_name, input: r.input || {},
-      suggestions: Array.isArray(r.permission_suggestions) ? r.permission_suggestions : [],
-    };
+    this.askPermission({
+      requestId: m.request_id, tool: r.tool_name, input: r.input || {}, suggestions: r.permission_suggestions,
+      toolUseId: r.tool_use_id || null, reason: r.decision_reason || r.description || '',
+    });
+  }
+
+  // p: { requestId, tool, input, suggestions, toolUseId, reason, hook? (kết nối của hook đang chờ) }
+  askPermission(p) {
+    p.suggestions = Array.isArray(p.suggestions) ? p.suggestions : [];
     this.pending.set(p.requestId, p);
     const ev = {
       kind: 'permission', requestId: p.requestId, tool: p.tool, summary: toolSummary(p.tool, p.input),
-      input: clip(JSON.stringify(p.input, null, 1), 6000), canAlways: p.suggestions.length > 0, toolUseId: r.tool_use_id || null,
-      reason: r.decision_reason || r.description || '',
+      input: clip(JSON.stringify(p.input, null, 1), 6000), canAlways: p.suggestions.length > 0, toolUseId: p.toolUseId || null,
+      reason: p.reason || '',
     };
     if (p.tool === 'AskUserQuestion' && Array.isArray(p.input.questions)) {
       ev.questions = p.input.questions.map((q) => ({
@@ -705,6 +840,7 @@ class Session {
   }
 
   refreshStatus() {
+    if (this.bridge && !this.proc) return this.broadcastState();
     if (!this.proc) return this.setStatus('off');
     if (this.pending.size) return this.setStatus('waiting');
     this.setStatus(this.inflight > 0 ? 'running' : 'idle');
@@ -714,11 +850,68 @@ class Session {
     text = String(text || '').trim();
     if (!text) throw new RemoteError('EMPTY', 'Tin nhắn trống');
     if (text.length > 100e3) throw new RemoteError('TOO_LONG', 'Tin nhắn quá dài');
+    if (this.bridge && !this.proc) return this.sendExternal(text);
     this.start();
     this.store({ kind: 'user', text });
     this.inflight++;
     this.write({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, session_id: this.id });
     if (this.status !== 'starting' && this.status !== 'waiting') this.setStatus('running');
+  }
+
+  // ---- phiên đang mở trên máy (qua hook.js) ----
+
+  // Gửi tin vào phiên trên máy: hook Stop đang chờ thì đưa ngay, không thì xếp hàng tới lần Claude xong lượt.
+  sendExternal(text) {
+    const b = this.bridge;
+    if (!b.attached) this.attach(true);
+    this.store({ kind: 'user', text });
+    (this.echo ||= new Set()).add(text);
+    if (b.parked) {
+      this.release({ action: 'message', text: phoneMessage(text) });
+      b.busy = true;
+    } else {
+      b.queue.push(text);
+      this.store({ kind: 'note', text: b.busy
+        ? 'Đã xếp hàng — gửi khi Claude trên máy xong lượt này'
+        : 'Phiên trên máy đang rảnh nên chưa nhận được: gõ /phone (hoặc một tin bất kỳ) trong VS Code để chuyển sang điện thoại' });
+    }
+    this.broadcastState();
+  }
+
+  // Trả lời hook Stop đang chờ (nếu có).
+  release(reply) {
+    const b = this.bridge;
+    if (!b || !b.parked) return false;
+    const w = b.parked;
+    b.parked = null;
+    clearInterval(w.keepAlive);
+    try { w.res.end(JSON.stringify(reply)); } catch {}
+    return true;
+  }
+
+  // Bật/tắt điều khiển phiên trên máy từ điện thoại.
+  attach(on, reason) {
+    const b = this.bridge;
+    if (!b) throw new RemoteError('NOT_EXTERNAL', 'Phiên này không mở trên máy tính');
+    on = !!on;
+    if (b.attached === on) return;
+    b.attached = on;
+    if (on) {
+      this.store({ kind: 'note', text: 'Đang điều khiển phiên trên máy từ điện thoại' });
+    } else {
+      this.release({ action: 'continue' });
+      b.queue = [];
+      // quyền đang chờ: trả về hộp thoại trên máy
+      for (const [id, p] of this.pending) {
+        if (!p.hook) continue;
+        this.pending.delete(id);
+        clearInterval(p.hook.keepAlive);
+        try { p.hook.res.end(JSON.stringify({ decision: null })); } catch {}
+        this.store({ kind: 'decided', requestId: id, decision: 'cancel' });
+      }
+      this.store({ kind: 'note', text: reason || 'Đã thả phiên về máy tính' });
+    }
+    this.broadcastState();
   }
 
   decide(requestId, { decision, answers, message } = {}) {
@@ -734,12 +927,26 @@ class Session {
       if (decision === 'always' && p.suggestions.length) response.updatedPermissions = p.suggestions;
     } else throw new RemoteError('FORMAT', 'decision phải là allow, always hoặc deny');
     this.pending.delete(requestId);
-    this.write({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } });
+    if (p.hook) {   // xin quyền từ phiên trên máy: trả cho hook.js
+      clearInterval(p.hook.keepAlive);
+      try { p.hook.res.end(JSON.stringify({ decision: response })); } catch {}
+      if (this.bridge) this.bridge.busy = true;
+    } else this.write({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } });
     this.store({ kind: 'decided', requestId, decision, ...(answers ? { answers } : {}) });
     this.refreshStatus();
   }
 
   interrupt() {
+    if (this.bridge && !this.proc) {   // phiên trên máy: chỉ dừng được qua lần xin quyền đang chờ
+      for (const [id, p] of [...this.pending]) {
+        if (!p.hook) continue;
+        this.pending.delete(id);
+        clearInterval(p.hook.keepAlive);
+        try { p.hook.res.end(JSON.stringify({ decision: { behavior: 'deny', message: 'Người dùng đã ngắt từ điện thoại', interrupt: true } })); } catch {}
+        this.store({ kind: 'decided', requestId: id, decision: 'deny' });
+      }
+      return this.broadcastState();
+    }
     if (!this.proc) return;
     for (const id of [...this.pending.keys()]) this.decide(id, { decision: 'deny', message: 'Người dùng đã ngắt' });
     this.write({ type: 'control_request', request_id: `int-${Date.now()}`, request: { subtype: 'interrupt' } });
@@ -772,6 +979,7 @@ class Session {
   }
 
   close() {
+    if (this.bridge && !this.proc) return this.attach(false);
     if (!this.proc) return;
     this.stopping = true;
     const proc = this.proc;
@@ -855,6 +1063,71 @@ function createHub(ctx = {}) {
       return new Session('00000000-0000-0000-0000-000000000000', { hub }).effective();
     },
     notify: (title, body, sid) => (ctx.notify || notify)(title, body, sid),
+    // Phiên trên máy vừa gọi hook: tạo/cập nhật cầu nối.
+    bridgeFor(b) {
+      const id = String(b.session_id || '').toLowerCase();
+      if (!UUID.test(id)) throw new RemoteError('FORMAT', 'session_id không hợp lệ');
+      let s = sessions.get(id);
+      if (!s) {
+        s = new Session(id, { known: true, hub, cwd: b.cwd || undefined });
+        sessions.set(id, s);
+      }
+      if (!s.bridge) s.bridge = { attached: false, parked: null, queue: [], busy: false, lastSeen: 0, entrypoint: '', transcript: '' };
+      Object.assign(s.bridge, { lastSeen: Date.now(), entrypoint: String(b.entrypoint || s.bridge.entrypoint || '') });
+      if (b.transcript_path) s.bridge.transcript = String(b.transcript_path);
+      if (!s.cwd && b.cwd) s.cwd = String(b.cwd);
+      if (s.fileOffset == null) s.loadTranscript(true);
+      return s;
+    },
+    // Hook Stop: không gắn điện thoại -> cho qua; có tin xếp hàng -> đưa luôn; không thì giữ kết nối tới khi có tin.
+    hookStop(b, req, res) {
+      const s = hub.bridgeFor(b);
+      const br = s.bridge;
+      br.busy = false;
+      s.tail();
+      if (!br.attached) { s.broadcastState(); return res.end(JSON.stringify({ action: 'continue' })); }
+      if (br.queue.length) {
+        br.busy = true;
+        s.broadcastState();
+        return res.end(JSON.stringify({ action: 'message', text: phoneMessage(br.queue.shift()) }));
+      }
+      s.release({ action: 'continue' });   // hook cũ còn treo (hiếm) -> thả
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      const w = { res, keepAlive: setInterval(() => { try { res.write(' '); } catch {} }, 20e3) };
+      br.parked = w;
+      req.on('close', () => {
+        if (br.parked === w) { br.parked = null; clearInterval(w.keepAlive); s.broadcastState(); }
+      });
+      s.broadcastState();
+      if (s.clients.size === 0) hub.notify(`Chờ lệnh · ${s.label()}`, clip(b.last || s.lastText, 180), s.id);
+    },
+    // Hook PermissionRequest: gắn điện thoại -> hỏi trên điện thoại, không thì để VS Code hỏi như thường.
+    hookPermission(b, req, res) {
+      const s = hub.bridgeFor(b);
+      if (!s.bridge.attached) return res.end(JSON.stringify({ decision: null }));
+      s.tail();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      const hook = { res, keepAlive: setInterval(() => { try { res.write(' '); } catch {} }, 20e3) };
+      const requestId = `hook-${crypto.randomBytes(6).toString('hex')}`;
+      s.askPermission({ requestId, tool: String(b.tool_name || 'Tool'), input: b.tool_input || {}, suggestions: b.permission_suggestions, hook });
+      req.on('close', () => {
+        clearInterval(hook.keepAlive);
+        if (s.pending.get(requestId) === undefined) return;
+        s.pending.delete(requestId);   // trên máy đã trả lời / bấm dừng
+        s.store({ kind: 'decided', requestId, decision: 'cancel' });
+        s.broadcastState();
+      });
+    },
+    // Hook UserPromptSubmit: /phone -> chuyển sang điện thoại; gõ tin khác ở máy -> thả về máy.
+    hookPrompt(b) {
+      const s = hub.bridgeFor(b);
+      const p = String(b.prompt || '');
+      s.bridge.busy = true;
+      if (/^\s*\/phone\b/i.test(p) || p.includes('[[cc-remote:phone]]')) s.attach(true);
+      else if (s.bridge.attached) s.attach(false, 'Bạn vừa gõ trên máy — đã thả phiên về máy tính');
+      else s.broadcastState();
+      return { ok: true };
+    },
     suggestAccount() {
       const info = accountsInfo();
       const a = info && info.accounts && info.accounts.find((x) => x.suggested);
@@ -883,13 +1156,15 @@ function createHub(ctx = {}) {
     },
     state() {
       const info = accountsInfo();
-      const live = [...sessions.values()].filter((s) => s.proc || s.pending.size).map((s) => s.summary())
+      const recentBridge = (s) => s.bridge && (s.bridge.attached || Date.now() - s.bridge.lastSeen < 12 * 3600e3);
+      const live = [...sessions.values()].filter((s) => s.proc || s.pending.size || recentBridge(s)).map((s) => s.summary())
         .sort((a, b) => b.updatedAt - a.updatedAt);
       const liveIds = new Set(live.map((s) => s.id));
       return {
         version: VERSION, host: os.hostname(), now: Date.now(),
         live,
         recent: recentSessions(40).filter((s) => !liveIds.has(s.id)),
+        projects: projects(40).map((p) => ({ ...p, live: live.filter((l) => sameDir(l.cwd, p.cwd)).length })),
         accounts: info && info.accounts ? {
           active: info.active, conflict: !!info.conflict,
           list: info.accounts.map((a) => ({
@@ -929,11 +1204,22 @@ function createHub(ctx = {}) {
       for (const s of sessions.values()) {
         const quiet = s.clients.size === 0 && now - s.updatedAt > IDLE_CLOSE_MS;
         if (s.proc && quiet && s.status === 'idle') s.close();
-        else if (!s.proc && !s.pending.size && s.clients.size === 0 && now - s.updatedAt > DORMANT_DROP_MS) sessions.delete(s.id);
+        else if (!s.proc && !s.pending.size && !s.bridge && s.clients.size === 0 && now - s.updatedAt > DORMANT_DROP_MS) sessions.delete(s.id);
       }
     },
-    shutdown() { for (const s of sessions.values()) if (s.proc) killTree(s.proc); },
+    shutdown() {
+      clearInterval(tailTimer);
+      for (const s of sessions.values()) {
+        if (s.proc) killTree(s.proc);
+        if (s.bridge) s.release({ action: 'continue' });
+      }
+    },
   };
+  // phiên không do mình chạy mà có người xem / đang gắn điện thoại: đọc phần mới của file lịch sử
+  const tailTimer = setInterval(() => {
+    for (const s of sessions.values()) if (!s.proc && (s.clients.size || (s.bridge && s.bridge.attached))) s.tail();
+  }, 700);
+  tailTimer.unref();
   return hub;
 }
 
@@ -962,7 +1248,10 @@ function bearer(req) {
   return h.startsWith('Bearer ') ? h.slice(7).trim() : '';
 }
 
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
 function createRemoteServer(hub) {
+  try { hookKey(); } catch {}   // để hook.js đọc được khoá ngay từ lần đầu
   const send = (res, code, data) => {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(data));
@@ -1008,11 +1297,27 @@ function createRemoteServer(hub) {
         return send(res, 200, { ...pair(String(b.code || '').trim(), b.name), host: os.hostname() });
       }
       if (!p.startsWith('/v1/')) return send(res, 404, { error: 'NOT_FOUND', message: 'Không có' });
+      const hm = /^\/v1\/hook\/(stop|permission|prompt)$/.exec(p);
+      if (hm && req.method === 'POST') {
+        const key = String(req.headers['x-hook-key'] || '');
+        const want = hookKey();
+        const ok = LOOPBACK.has(req.socket.remoteAddress) && key.length === want.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(want));
+        if (!ok) return send(res, 403, { error: 'FORBIDDEN', message: 'Sai khoá hook' });
+        const b = await jsonBody(req);
+        if (hm[1] === 'stop') return hub.hookStop(b, req, res);
+        if (hm[1] === 'permission') return hub.hookPermission(b, req, res);
+        return send(res, 200, hub.hookPrompt(b));
+      }
       const dev = authDevice(bearer(req));
       if (!dev) return send(res, 401, { error: 'UNAUTHORIZED', message: 'Thiết bị chưa ghép hoặc đã bị thu hồi' });
 
       if (p === '/v1/state' && req.method === 'GET') return send(res, 200, hub.state());
       if (p === '/v1/projects' && req.method === 'GET') return send(res, 200, projects());
+      if (p === '/v1/projects/sessions' && req.method === 'GET') {
+        const cwd = url.searchParams.get('cwd') || '';
+        if (!cwd) return send(res, 400, { error: 'FORMAT', message: 'Thiếu cwd' });
+        return send(res, 200, projectSessions(cwd));
+      }
       if (p === '/v1/capabilities' && req.method === 'GET') {
         const caps = await hub.capabilities();
         return send(res, 200, { ...(caps || { models: [], commands: [], outputStyles: ['default'], account: null }), efforts: EFFORTS, defaults: hub.defaults() });
@@ -1030,7 +1335,7 @@ function createRemoteServer(hub) {
         return send(res, 200, { ok: await hub.notify('CC Remote', 'Thông báo hoạt động bình thường', null) });
       }
 
-      const m = /^\/v1\/sessions\/([0-9a-f-]{36})(?:\/(events|send|permission|interrupt|mode|model|settings|close))?$/i.exec(p);
+      const m = /^\/v1\/sessions\/([0-9a-f-]{36})(?:\/(events|send|permission|interrupt|mode|model|settings|attach|close))?$/i.exec(p);
       if (!m) return send(res, 404, { error: 'NOT_FOUND', message: 'Không có' });
       const s = hub.get(m[1].toLowerCase(), { load: !m[2] || m[2] === 'events' });
       if (!s) return send(res, 404, { error: 'NOT_FOUND', message: 'Không tìm thấy phiên' });
@@ -1047,6 +1352,7 @@ function createRemoteServer(hub) {
       else if (action === 'mode') s.setMode(b.mode);
       else if (action === 'model') s.setModel(b.model);
       else if (action === 'settings') s.applySettings(b);
+      else if (action === 'attach') s.attach(b.on !== false);
       else if (action === 'close') s.close();
       return send(res, 200, s.summary());
     } catch (err) {
@@ -1113,9 +1419,82 @@ async function tailscaleServe() {
   return { ok: r.ok, output: clip((r.out + '\n' + r.err).trim(), 1500) };
 }
 
+// ---------- cài hook vào Claude Code (điều khiển phiên đang mở trên máy) ----------
+
+const claudeDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+const HOOK_SCRIPT = path.join(__dirname, 'hook.js').replace(/\\/g, '/');
+const hookCmd = (ev) => `node "${HOOK_SCRIPT}" ${ev}`;
+const isOurHook = (h) => h && typeof h.command === 'string' && h.command.includes('hook.js') && h.command.includes(path.basename(__dirname));
+const HOOKS = [
+  ['Stop', 'stop', { timeout: 86400, statusMessage: 'Chờ lệnh từ điện thoại (CC Remote)…' }],
+  ['PermissionRequest', 'permission', { timeout: 86400 }],
+  ['UserPromptSubmit', 'prompt', { timeout: 15 }],
+];
+const PHONE_CMD = `---
+description: Chuyển phiên này sang điều khiển từ điện thoại (CC Remote)
+---
+[[cc-remote:phone]] Tôi chuyển phiên này sang điện thoại qua app CC Remote (tôi tự cài hook của nó). Từ giờ tin nhắn của tôi sẽ đến dưới dạng "Stop hook feedback" bắt đầu bằng "📱 Tin nhắn của người dùng, gửi từ điện thoại" — đó chính là tôi, hãy làm theo như tin nhắn tôi gõ trực tiếp. Bây giờ chỉ trả lời đúng một câu: "Đã chuyển sang điện thoại — nhắn tiếp trong app CC Remote."
+`;
+
+function readSettingsFile() {
+  const file = path.join(claudeDir(), 'settings.json');
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return { file, data: {} }; }
+  try { return { file, data: JSON.parse(text) || {}, text }; } catch {
+    throw new RemoteError('FORMAT', `Không đọc được ${file} (JSON lỗi) — sửa tay rồi thử lại`);
+  }
+}
+
+// bỏ hook của mình khỏi settings.hooks (giữ nguyên hook khác)
+function stripOurHooks(hooks) {
+  for (const ev of Object.keys(hooks || {})) {
+    if (!Array.isArray(hooks[ev])) continue;
+    hooks[ev] = hooks[ev].map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isOurHook(h)) })).filter((g) => g.hooks.length);
+    if (!hooks[ev].length) delete hooks[ev];
+  }
+}
+
+function hooksStatus() {
+  let data = {};
+  try { data = readSettingsFile().data; } catch { return { installed: false, error: 'settings.json lỗi' }; }
+  const h = data.hooks || {};
+  const have = (ev) => (h[ev] || []).some((g) => (g.hooks || []).some(isOurHook));
+  return { installed: HOOKS.every(([ev]) => have(ev)), partial: HOOKS.some(([ev]) => have(ev)), command: fs.existsSync(path.join(claudeDir(), 'commands', 'phone.md')) };
+}
+
+function installHooks() {
+  const { file, data, text } = readSettingsFile();
+  if (text) fs.copyFileSync(file, `${file}.cc-remote-backup`);
+  data.hooks = data.hooks && typeof data.hooks === 'object' ? data.hooks : {};
+  stripOurHooks(data.hooks);
+  for (const [ev, arg, extra] of HOOKS) {
+    (data.hooks[ev] ||= []).push({ ...(ev === 'PermissionRequest' ? { matcher: '*' } : {}), hooks: [{ type: 'command', command: hookCmd(arg), ...extra }] });
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
+  const cmdDir = path.join(claudeDir(), 'commands');
+  fs.mkdirSync(cmdDir, { recursive: true });
+  fs.writeFileSync(path.join(cmdDir, 'phone.md'), PHONE_CMD);
+  hookKey();
+  return hooksStatus();
+}
+
+function uninstallHooks() {
+  const { file, data, text } = readSettingsFile();
+  if (text && data.hooks) {
+    stripOurHooks(data.hooks);
+    if (!Object.keys(data.hooks).length) delete data.hooks;
+    fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
+  }
+  const cmd = path.join(claudeDir(), 'commands', 'phone.md');
+  try { if (fs.readFileSync(cmd, 'utf8').includes('[[cc-remote:phone]]')) fs.unlinkSync(cmd); } catch {}
+  return hooksStatus();
+}
+
 module.exports = {
+  hookKey, hooksStatus, installHooks, uninstallHooks,
   RemoteError, load, newPairCode, pair, authDevice, devices, revoke, setNtfy, notify,
-  findClaude, normalize, cleanUserText, toolSummary, readTranscript, recentSessions, projects, sessionFile,
+  findClaude, normalize, cleanUserText, toolSummary, readTranscript, recentSessions, projects, projectSessions, sessionFile,
   Session, createHub, createRemoteServer, start, tailscaleInfo, tailscaleServe, REMOTE_PORT, MODES,
 };
 
@@ -1132,10 +1511,16 @@ if (require.main === module) {
     for (const d of list) console.log(`${d.id}  ${d.name}  ghép ${new Date(d.createdAt).toLocaleString()}  dùng lần cuối ${new Date(d.lastSeen).toLocaleString()}`);
   } else if (cmd === 'revoke' && arg) {
     try { revoke(arg); console.log('Đã thu hồi'); } catch (err) { console.error(err.message); process.exitCode = 2; }
+  } else if (cmd === 'hooks') {
+    try {
+      const st = arg === 'install' ? installHooks() : arg === 'uninstall' ? uninstallHooks() : hooksStatus();
+      console.log(st.installed ? 'Hook CC Remote: đã cài (mở lại phiên Claude Code để có hiệu lực; gõ /phone để chuyển sang điện thoại)'
+        : st.partial ? 'Hook CC Remote: cài thiếu — chạy: node remote.js hooks install' : 'Hook CC Remote: chưa cài');
+    } catch (err) { console.error(err.message); process.exitCode = 2; }
   } else if (cmd === 'serve') {
     start();
   } else {
-    console.error('Dùng: node remote.js [pair|devices|revoke <id>|serve]');
+    console.error('Dùng: node remote.js [pair|devices|revoke <id>|hooks [install|uninstall]|serve]');
     process.exitCode = 1;
   }
 }

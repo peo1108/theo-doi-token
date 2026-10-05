@@ -21,6 +21,9 @@ final class AppModel {
         if let id = UserDefaults.standard.string(forKey: "openSession"), id.count == 36 {
             path.append(Route.session(id))
         }
+        if let cwd = UserDefaults.standard.string(forKey: "openProject"), !cwd.isEmpty {
+            path.append(Route.project(cwd))
+        }
     }
 
     var api: APIClient? {
@@ -85,6 +88,12 @@ final class AppModel {
             caps = c
             capsAt = Date()
         }
+    }
+
+    func projectSessions(_ cwd: String) async throws -> [RecentSession] {
+        guard let api else { return [] }
+        let q = cwd.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        return try await api.call("GET", "/v1/projects/sessions?cwd=\(q)")
     }
 
     func projects() async throws -> [Project] {

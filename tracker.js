@@ -645,9 +645,9 @@ async function remoteApi(req, url, json) {
     const d = remote.load();
     const pair = d.pair && d.pair.expiresAt > Date.now() ? { code: d.pair.code, expiresAt: d.pair.expiresAt } : null;
     const live = remoteHub ? [...remoteHub.sessions.values()].filter((x) => x.proc).length : 0;
-    return json({ port: remote.REMOTE_PORT, enabled: !!remoteHub, devices: remote.devices(), pair, ntfy: d.ntfy, tailscale: tsCache.v, live }), true;
+    return json({ port: remote.REMOTE_PORT, enabled: !!remoteHub, devices: remote.devices(), pair, ntfy: d.ntfy, tailscale: tsCache.v, live, hooks: remote.hooksStatus() }), true;
   }
-  const m = /^\/api\/remote\/(pair|revoke|ntfy|ntfy-test|serve)$/.exec(url.pathname);
+  const m = /^\/api\/remote\/(pair|revoke|ntfy|ntfy-test|serve|hooks)$/.exec(url.pathname);
   if (!m || req.method !== 'POST') return null;
   if (!guardPost(req)) return false;
   let body;
@@ -656,6 +656,7 @@ async function remoteApi(req, url, json) {
   if (m[1] === 'pair') json(remote.newPairCode());
   else if (m[1] === 'revoke') json(remote.revoke(String(body.id || '')));
   else if (m[1] === 'ntfy') json({ ntfy: remote.setNtfy(body) });
+  else if (m[1] === 'hooks') json(body.on === false ? remote.uninstallHooks() : remote.installHooks());
   else if (m[1] === 'ntfy-test') json({ ok: await remote.notify('CC Remote', 'Thông báo hoạt động bình thường', null) });
   else { const r = await remote.tailscaleServe(); tsCache = null; json(r); }
   return true;

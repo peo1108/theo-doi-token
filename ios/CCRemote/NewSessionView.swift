@@ -4,7 +4,14 @@ struct NewSessionView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     @State private var projects: [Project] = []
-    @State private var cwd = UserDefaults.standard.string(forKey: "lastCwd") ?? ""
+    @State private var cwd: String
+    private let presetCwd: String?
+
+    /// presetCwd: mở từ trong một dự án -> chọn sẵn thư mục đó
+    init(presetCwd: String? = nil) {
+        self.presetCwd = presetCwd
+        _cwd = State(initialValue: presetCwd ?? UserDefaults.standard.string(forKey: "lastCwd") ?? "")
+    }
     @State private var prompt = ""
     @State private var mode = PermissionMode.default
     @State private var model = UserDefaults.standard.string(forKey: "lastModel") ?? ""

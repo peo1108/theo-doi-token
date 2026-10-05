@@ -95,6 +95,10 @@ struct SessionSummary: Codable, Identifiable, Hashable {
     let id: String
     let settings: SessionSettings?
     let account: String?
+    let external: Bool?
+    let source: String?
+    let attached: Bool?
+    let ready: Bool?
     let cwd: String?
     let project: String?
     let title: String?
@@ -133,6 +137,7 @@ struct RemoteState: Codable {
     let recent: [RecentSession]
     let accounts: AccountsInfo?
     let ntfy: NtfyConfig?
+    let projects: [Project]?
 }
 
 struct Project: Codable, Identifiable, Hashable {
@@ -140,6 +145,9 @@ struct Project: Codable, Identifiable, Hashable {
     let cwd: String
     let name: String
     let lastUsed: Double
+    let count: Int?
+    let lastTitle: String?
+    let live: Int?
 }
 
 struct QuestionOption: Codable, Hashable {
@@ -185,12 +193,19 @@ struct Event: Decodable, Identifiable, Hashable {
     let turns: Int?
     let suggest: Suggest?
     let toolUseId: String?
+    let title: String?
+    let path: String?
+    let code: String?
+    let oldText: String?
+    let newText: String?
+    let via: String?
 
     var id: Int { seq }
 
     enum CodingKeys: String, CodingKey {
         case kind, seq, t, text, toolId = "id", name, summary, input, error, requestId, tool, canAlways, reason
         case questions, plan, decision, ok, aborted, cost, ms, turns, suggest, toolUseId
+        case title, path, code, oldText = "old", newText = "new", via
     }
 }
 
@@ -224,6 +239,7 @@ struct Ignored: Decodable {}
 
 enum Route: Hashable {
     case session(String)
+    case project(String)
 }
 
 enum PermissionMode: String, CaseIterable, Identifiable {

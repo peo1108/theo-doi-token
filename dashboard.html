@@ -299,7 +299,7 @@
   .acct-msg.err { background: var(--bad-bg); }
 
   /* ---------------- điện thoại (CC Remote) ---------------- */
-  .rm-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 24px; }
+  .rm-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 24px; }
   .rm-step h3 { font-size: 12.5px; font-weight: 600; color: var(--muted); margin: 0 0 7px; }
   .rm-step p { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; line-height: 1.55; }
   .rm-url { font: 600 13px ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--text); background: var(--tile); border-radius: 7px; padding: 6px 9px; overflow-wrap: anywhere; user-select: all; display: inline-block; }
@@ -311,7 +311,8 @@
   .rm-ntfy input { flex: 1; min-width: 0; font: inherit; font-size: 13px; color: var(--text); background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; outline: none; }
   .rm-ntfy input:focus { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-soft); }
   .rm-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-  @media (max-width: 900px) { .rm-grid { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 1100px) { .rm-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 700px) { .rm-grid { grid-template-columns: minmax(0, 1fr); } }
 
   .budget + .budget { margin-top: 14px; }
   .budget .b-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; }
@@ -2108,9 +2109,16 @@ function renderRemote() {
     <div class="rm-actions"><button class="ghost sm primary" data-rm="ntfy" ${dis}>Lưu</button>
       ${n ? `<button class="ghost sm" data-rm="ntfy-test" ${dis}>Gửi thử</button>` : ''}</div>`;
 
+  const hk = RM.hooks || {};
+  const step4 = (hk.installed
+    ? `${statusHTML('good', 'Đã cài hook')}<p>Trong VS Code gõ <span class="rm-url">/phone</span> để chuyển phiên đang làm sang điện thoại; gõ tin ở máy là tự thả về. Phiên mở trước khi cài cần mở lại một lần.</p>
+      <div class="rm-actions"><button class="ghost sm" data-rm="hooks-off" ${dis}>Gỡ hook</button></div>`
+    : `${statusHTML('info', hk.partial ? 'Cài thiếu' : 'Chưa cài')}<p>Cho điện thoại gửi tin và duyệt quyền ngay trong phiên Claude Code đang mở trên máy (VS Code, terminal). Thêm hook vào <span class="rm-url">~/.claude/settings.json</span> (có sao lưu).</p>
+      <div class="rm-actions"><button class="ghost sm primary" data-rm="hooks-on" ${dis}>Cài hook</button></div>`);
   box.innerHTML = `<div class="rm-step"><h3>1 · Kết nối</h3>${step1}</div>
     <div class="rm-step"><h3>2 · Ghép điện thoại</h3>${step2}</div>
-    <div class="rm-step"><h3>3 · Thông báo khi app đóng</h3>${step3}</div>`;
+    <div class="rm-step"><h3>3 · Thông báo khi app đóng</h3>${step3}</div>
+    <div class="rm-step"><h3>4 · Điều khiển phiên VS Code</h3>${step4}</div>`;
 }
 els('rmBody').addEventListener('click', async e => {
   const b = e.target.closest('button[data-rm]');
@@ -2127,6 +2135,7 @@ els('rmBody').addEventListener('click', async e => {
     if (act === 'pair') await acctPost('/api/remote/pair');
     else if (act === 'revoke') { await acctPost('/api/remote/revoke', { id: b.dataset.id }); setRmMsg('ok', 'Đã thu hồi thiết bị'); }
     else if (act === 'ntfy') { const r = await acctPost('/api/remote/ntfy', { topic }); setRmMsg('ok', r.ntfy ? 'Đã bật thông báo ntfy' : 'Đã tắt thông báo ntfy'); }
+    else if (act === 'hooks-on' || act === 'hooks-off') { const r = await acctPost('/api/remote/hooks', { on: act === 'hooks-on' }); setRmMsg('ok', r.installed ? 'Đã cài hook — mở lại phiên Claude Code rồi gõ /phone' : 'Đã gỡ hook'); }
     else if (act === 'ntfy-test') { const r = await acctPost('/api/remote/ntfy-test'); setRmMsg(r.ok ? 'ok' : 'err', r.ok ? 'Đã gửi — kiểm tra app ntfy' : 'Gửi không được'); }
     else if (act === 'serve') { const r = await acctPost('/api/remote/serve'); setRmMsg(r.ok ? 'ok' : 'err', r.ok ? 'Đã mở cho điện thoại' : 'Tailscale báo: ' + r.output); }
   } catch (err) { setRmMsg('err', err.message); }

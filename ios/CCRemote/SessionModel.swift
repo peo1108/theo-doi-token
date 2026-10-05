@@ -123,4 +123,5 @@ final class SessionModel {
     func setMode(_ mode: String, api: APIClient) async { await post(api, "mode", ["mode": mode]) }
     func setModel(_ model: String, api: APIClient) async { await post(api, "model", ["model": model]) }
     func close(api: APIClient) async { await post(api, "close") }
+    func attach(_ on: Bool, api: APIClient) async { await post(api, "attach", ["on": on]) }
 }

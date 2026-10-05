@@ -30,6 +30,8 @@ struct RootView: View {
                             switch route {
                             case .session(let id):
                                 SessionView(id: id)
+                            case .project(let cwd):
+                                ProjectView(cwd: cwd)
                             }
                         }
                 }
