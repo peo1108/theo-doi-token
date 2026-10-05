@@ -516,6 +516,65 @@ function pickCaps(x) {
   };
 }
 
+// ---------- ảnh từ điện thoại ----------
+
+const MAX_TEXT = 1e6;
+const MAX_IMAGES = 10;
+const UPLOAD_KEEP_MS = 7 * 24 * 60 * MIN;
+const IMAGE_TYPES = {
+  'image/jpeg': { ext: 'jpg', ok: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  'image/png': { ext: 'png', ok: (b) => b.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])) },
+  'image/gif': { ext: 'gif', ok: (b) => b.subarray(0, 4).toString('latin1') === 'GIF8' },
+  'image/webp': { ext: 'webp', ok: (b) => b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP' },
+};
+const uploadsDir = (sid) => path.join(dataDir(), 'uploads', ...(sid ? [sid] : []));
+
+// Kiểm tra mime + chữ ký đầu file (không tin phần mở rộng / mime điện thoại khai).
+function checkImages(images) {
+  if (images == null) return [];
+  if (!Array.isArray(images)) throw new RemoteError('BAD_IMAGE', 'Ảnh đính kèm không hợp lệ');
+  if (images.length > MAX_IMAGES) throw new RemoteError('TOO_MANY_IMAGES', `Tối đa ${MAX_IMAGES} ảnh mỗi tin`);
+  return images.map((x) => {
+    const t = x && IMAGE_TYPES[x.mime];
+    const buf = t && typeof x.data === 'string' ? Buffer.from(x.data, 'base64') : null;
+    if (!buf || buf.length < 12 || !t.ok(buf)) throw new RemoteError('BAD_IMAGE', 'Tệp đính kèm không phải ảnh JPEG / PNG / GIF / WebP');
+    return { mime: x.mime, data: x.data, buf, ext: t.ext, thumb: typeof x.thumb === 'string' ? x.thumb.slice(0, 400e3) : '' };
+  });
+}
+
+// Lưu vào data/uploads/<phiên>/<thời gian>-<n>.<ext> (để phiên hook đọc được và để xem lại ảnh đầy đủ).
+function saveUploads(sid, imgs) {
+  if (!imgs.length) return [];
+  const dir = uploadsDir(sid);
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = Date.now();
+  return imgs.map((x, i) => {
+    const name = `${stamp}-${i + 1}.${x.ext}`;
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, x.buf);
+    return { ...x, name, file };
+  });
+}
+
+function readUpload(sid, name) {
+  const n = String(name || '');
+  const t = Object.entries(IMAGE_TYPES).find(([, v]) => n.endsWith(`.${v.ext}`));
+  if (!/^\d+-\d+\.[a-z]+$/.test(n) || !t) throw new RemoteError('NOT_FOUND', 'Không có ảnh này', 404);
+  try { return { mime: t[0], data: fs.readFileSync(path.join(uploadsDir(sid), n)).toString('base64') }; }
+  catch { throw new RemoteError('NOT_FOUND', 'Không có ảnh này', 404); }
+}
+
+// Xoá thư mục ảnh của phiên không đổi trong 7 ngày.
+function sweepUploads(now = Date.now()) {
+  let dirs = [];
+  try { dirs = fs.readdirSync(uploadsDir(), { withFileTypes: true }); } catch { return; }
+  for (const d of dirs) {
+    if (!d.isDirectory()) continue;
+    const p = path.join(uploadsDir(), d.name);
+    try { if (now - fs.statSync(p).mtimeMs > UPLOAD_KEEP_MS) fs.rmSync(p, { recursive: true, force: true }); } catch {}
+  }
+}
+
 function killTree(proc) {
   if (!proc || proc.exitCode != null) return;
   if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { windowsHide: true });
@@ -913,25 +972,34 @@ class Session {
     this.setStatus(this.inflight > 0 ? 'running' : 'idle');
   }
 
-  send(text) {
+  // images: [{mime, data(base64), name, thumb}] từ điện thoại (đã thu nhỏ trên app).
+  send(text, images = []) {
     text = String(text || '').trim();
-    if (!text) throw new RemoteError('EMPTY', 'Tin nhắn trống');
-    if (text.length > 100e3) throw new RemoteError('TOO_LONG', 'Tin nhắn quá dài');
-    if (this.bridge && !this.proc) return this.sendExternal(text);
+    const imgs = checkImages(images);
+    if (!text && !imgs.length) throw new RemoteError('EMPTY', 'Tin nhắn trống');
+    if (text.length > MAX_TEXT) throw new RemoteError('TOO_LONG', 'Tin nhắn quá dài (tối đa 1 triệu ký tự)');
+    const saved = saveUploads(this.id, imgs);
+    const ev = { kind: 'user', text, ...(saved.length ? { images: saved.map((x) => ({ name: x.name, thumb: x.thumb })) } : {}) };
+    if (this.bridge && !this.proc) return this.sendExternal(text, saved, ev);
     this.start();
-    this.store({ kind: 'user', text });
+    this.store(ev);
     this.inflight++;
-    this.write({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, session_id: this.id });
+    const content = saved.length
+      ? [...(text ? [{ type: 'text', text }] : []), ...saved.map((x) => ({ type: 'image', source: { type: 'base64', media_type: x.mime, data: x.data } }))]
+      : text;
+    this.write({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: this.id });
     if (this.status !== 'starting' && this.status !== 'waiting') this.setStatus('running');
   }
 
   // ---- phiên đang mở trên máy (qua hook.js) ----
 
   // Gửi tin vào phiên trên máy: hook Stop đang chờ thì đưa ngay, không thì xếp hàng tới lần Claude xong lượt.
-  sendExternal(text) {
+  // Hook chỉ chèn được chữ -> ảnh đã lưu thành file, kèm đường dẫn để Claude tự mở bằng tool Read.
+  sendExternal(text, saved = [], ev = { kind: 'user', text }) {
     const b = this.bridge;
     if (!b.attached) this.attach(true);
-    this.store({ kind: 'user', text });
+    this.store(ev);
+    if (saved.length) text = `${text}${text ? '\n\n' : ''}[Ảnh đính kèm từ điện thoại — dùng tool Read để xem]\n${saved.map((x) => x.file).join('\n')}`;
     (this.echo ||= new Set()).add(text);
     if (b.parked) {
       this.release({ action: 'message', text: phoneMessage(text) });
@@ -1271,14 +1339,14 @@ function createHub(ctx = {}) {
       if (load) s.loadTranscript();
       return s;
     },
-    create({ cwd, text, mode, model, ...opts }) {
+    create({ cwd, text, images, mode, model, ...opts }) {
       cwd = String(cwd || '').trim();
       if (!cwd || !path.isAbsolute(cwd)) throw new RemoteError('NO_CWD', 'Cần đường dẫn thư mục đầy đủ');
       const id = crypto.randomUUID();
       const s = new Session(id, { cwd: path.resolve(cwd), mode, model, hub, opts });
       if (model) s.setModel(model);
       sessions.set(id, s);
-      try { s.send(text); } catch (err) { sessions.delete(id); throw err; }
+      try { s.send(text, images); } catch (err) { sessions.delete(id); throw err; }
       return s;
     },
     state() {
@@ -1329,6 +1397,7 @@ function createHub(ctx = {}) {
       return { ok: true, to: r && r.to, restarted, running: (r && r.running ? r.running.length : 0) };
     },
     sweep(now = Date.now()) {
+      sweepUploads(now);
       for (const s of sessions.values()) {
         const quiet = s.clients.size === 0 && now - s.updatedAt > IDLE_CLOSE_MS;
         if (s.proc && quiet && s.status === 'idle') s.close();
@@ -1385,7 +1454,7 @@ const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
 // ---------- lõi dùng chung: HTTP cũ (Tailscale) và hub (hub-link.js) đều gọi call() ----------
 
-const SESSION_METHODS = ['sessions.get', 'sessions.send', 'sessions.permission', 'sessions.interrupt', 'sessions.mode',
+const SESSION_METHODS = ['sessions.get', 'sessions.image', 'sessions.send', 'sessions.permission', 'sessions.interrupt', 'sessions.mode',
   'sessions.model', 'sessions.settings', 'sessions.attach', 'sessions.close'];
 
 async function call(hub, method, params = {}) {
@@ -1408,7 +1477,8 @@ async function call(hub, method, params = {}) {
   const id = String(p.id || '').toLowerCase();
   const s = UUID.test(id) && hub.get(id, { load: method === 'sessions.get' });
   if (!s) throw new RemoteError('NOT_FOUND', 'Không tìm thấy phiên', 404);
-  if (method === 'sessions.send') s.send(p.text);
+  if (method === 'sessions.image') return readUpload(s.id, p.name);
+  if (method === 'sessions.send') s.send(p.text, p.images);
   else if (method === 'sessions.permission') s.decide(String(p.requestId || ''), p);
   else if (method === 'sessions.interrupt') s.interrupt();
   else if (method === 'sessions.mode') s.setMode(p.mode);
@@ -1701,7 +1771,7 @@ module.exports = {
   hookKey, phoneTag, hooksStatus, installHooks, uninstallHooks,
   RemoteError, load, newPairCode, pair, authDevice, devices, revoke, setNtfy, notify,
   findClaude, normalize, cleanUserText, toolSummary, readTranscript, recentSessions, projects, projectSessions, sessionFile,
-  Session, createHub, createRemoteServer, call, start, tailscaleInfo, tailscaleServe, REMOTE_PORT, MODES,
+  Session, createHub, createRemoteServer, call, sweepUploads, start, tailscaleInfo, tailscaleServe, REMOTE_PORT, MODES,
 };
 
 // ---------- dòng lệnh ----------

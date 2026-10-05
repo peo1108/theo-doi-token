@@ -74,7 +74,11 @@ process.stdin.on('data', (d) => {
     buf = buf.slice(i + 1);
     if (!line.trim()) continue;
     const m = JSON.parse(line);
-    if (m.type === 'user') onUser(typeof m.message.content === 'string' ? m.message.content : '');
+    if (m.type === 'user') {
+      const c = m.message.content;
+      if (process.env.FAKE_ARGS_FILE) fs.appendFileSync(process.env.FAKE_ARGS_FILE.replace(/\.jsonl$/, '.input.jsonl'), JSON.stringify({ content: c }) + '\n');
+      onUser(typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b) => b.type === 'text').map((b) => b.text).join('\n') : '');
+    }
     else if (m.type === 'control_response') {
       const fn = waiting.get(m.response.request_id);
       waiting.delete(m.response.request_id);

@@ -653,3 +653,78 @@ test('call: state, tạo / gửi / duyệt quyền / ngắt / đóng phiên qua 
   await assert.rejects(R.call(hub, 'projects.sessions', {}), (e) => e.code === 'FORMAT');
   assert.equal((await R.call(hub, 'alwaysOn', { on: true })).alwaysOn, true);
 });
+
+// ---------- ảnh và tin lớn ----------
+
+// ảnh nhỏ hợp lệ (chỉ cần đúng chữ ký đầu file)
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 7)]).toString('base64');
+const JPG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 3)]).toString('base64');
+const img = (data = PNG, mime = 'image/png', name = 'a.png') => ({ mime, data, name, thumb: JPG });
+const inputLog = () => (fs.existsSync(ARGS_FILE.replace(/\.jsonl$/, '.input.jsonl'))
+  ? fs.readFileSync(ARGS_FILE.replace(/\.jsonl$/, '.input.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+
+test('ảnh vào phiên claude -p thành khối image; xem lại ảnh đầy đủ bằng sessions.image', async () => {
+  const s = await R.call(hub, 'sessions.create', { cwd: WORK, text: 'xem ảnh này', images: [img(), img(JPG, 'image/jpeg', 'b.jpg')] });
+  const evs = await watch(s.id, has('assistant', (e) => e.text === 'echo: xem ảnh này'));
+  const blocks = inputLog().pop().content;
+  assert.deepEqual(blocks.map((b) => b.type), ['text', 'image', 'image']);
+  assert.deepEqual(blocks[1].source, { type: 'base64', media_type: 'image/png', data: PNG });
+  const u = evs.find((e) => e.kind === 'user');
+  assert.equal(u.images.length, 2);
+  assert.equal(u.images[0].thumb, JPG);
+  const full = await R.call(hub, 'sessions.image', { id: s.id, name: u.images[1].name });
+  assert.deepEqual(full, { mime: 'image/jpeg', data: JPG });
+  await assert.rejects(R.call(hub, 'sessions.image', { id: s.id, name: '../../remote.json' }), (e) => e.code === 'NOT_FOUND');
+  // chỉ ảnh, không chữ
+  await R.call(hub, 'sessions.send', { id: s.id, text: '', images: [img()] });
+  await until(() => inputLog().pop().content.length === 1);
+  assert.equal(inputLog().pop().content[0].type, 'image');
+});
+
+test('ảnh: sai chữ ký file -> BAD_IMAGE; quá 10 ảnh -> TOO_MANY_IMAGES; tin 900 000 ký tự qua được', async () => {
+  const s = await R.call(hub, 'sessions.create', { cwd: WORK, text: 'mở' });
+  await watch(s.id, has('result'));
+  const fake = Buffer.from('<html>không phải ảnh</html>').toString('base64');
+  await assert.rejects(R.call(hub, 'sessions.send', { id: s.id, text: 'x', images: [img(fake, 'image/png')] }), (e) => e.code === 'BAD_IMAGE');
+  await assert.rejects(R.call(hub, 'sessions.send', { id: s.id, text: 'x', images: [img(PNG, 'image/svg+xml', 'a.svg')] }), (e) => e.code === 'BAD_IMAGE');
+  await assert.rejects(R.call(hub, 'sessions.send', { id: s.id, text: 'x', images: Array.from({ length: 11 }, () => img()) }), (e) => e.code === 'TOO_MANY_IMAGES');
+  const long = 'dài '.repeat(225000);
+  await R.call(hub, 'sessions.send', { id: s.id, text: long });
+  await until(() => { const l = inputLog().pop(); return l && l.content === long.trim(); });
+  await assert.rejects(R.call(hub, 'sessions.send', { id: s.id, text: 'x'.repeat(1e6 + 1) }), (e) => e.code === 'TOO_LONG');
+});
+
+test('ảnh vào phiên VS Code (hook): lưu file, tin chèn vào có đường dẫn để Claude dùng Read', async () => {
+  R.setAlwaysOn(true);
+  hub.setIdle(500);
+  const id = 'abcdef00-1111-2222-3333-444444444444';
+  const dir = path.join(PROJECTS, 'vscode-img');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${id}.jsonl`);
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', cwd: WORK, sessionId: id, timestamp: new Date().toISOString(), message: { content: 'việc' } }) + '\n');
+  const base = { session_id: id, transcript_path: file, cwd: WORK };
+  const parked = runHook('stop', base);
+  await until(() => hub.get(id, { load: false })?.bridge?.parked);
+  await R.call(hub, 'sessions.send', { id, text: 'lỗi trong ảnh này', images: [img()] });
+  const r = await parked;
+  assert.equal(r.code, 2);
+  const paths = r.err.split('\n').filter((l) => l.endsWith('.png'));
+  assert.equal(paths.length, 1);
+  assert.ok(r.err.includes('lỗi trong ảnh này'));
+  assert.ok(r.err.includes('tool Read'));
+  assert.ok(paths[0].startsWith(path.join(env.dataDir, 'uploads', id)));
+  assert.deepEqual(fs.readFileSync(paths[0]), Buffer.from(PNG, 'base64'));
+});
+
+test('dọn ảnh cũ hơn 7 ngày trong data/uploads', () => {
+  const up = path.join(env.dataDir, 'uploads');
+  const old = path.join(up, 'cu'), fresh = path.join(up, 'moi');
+  fs.mkdirSync(old, { recursive: true });
+  fs.mkdirSync(fresh, { recursive: true });
+  fs.writeFileSync(path.join(old, 'a.png'), 'x');
+  const t = (Date.now() - 8 * 24 * 3600e3) / 1000;
+  fs.utimesSync(old, t, t);
+  R.sweepUploads(Date.now());
+  assert.ok(!fs.existsSync(old));
+  assert.ok(fs.existsSync(fresh));
+});
