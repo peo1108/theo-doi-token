@@ -635,6 +635,69 @@ async function accountsApi(req, url, json) {
   return true;
 }
 
+// ---------- hub trên VPS (thay cho Tailscale): PC kết nối ra hub ----------
+
+const HUB_FILE = path.join(DATA_DIR, 'hub.json');
+const DEFAULT_HUB = 'https://clauderc.caesarvn.xyz';
+let hubLink = null;
+
+// Trạng thái cho dashboard (không bao giờ trả token).
+function hubInfo() {
+  const d = readJSON(HUB_FILE, null);
+  const s = hubLink ? hubLink.status() : { state: 'off', since: null, error: null };
+  return d && d.machineToken
+    ? { paired: true, hubUrl: d.hubUrl, name: d.name, machineId: d.machineId, defaultUrl: DEFAULT_HUB, ...s }
+    : { paired: false, defaultUrl: DEFAULT_HUB, state: 'off' };
+}
+
+function startHubLink() {
+  if (hubLink) { hubLink.stop(); hubLink = null; }
+  const d = readJSON(HUB_FILE, null);
+  if (!remoteHub || !d || !d.machineToken) return;
+  hubLink = require('./hub-link.js').startLink({ hubUrl: d.hubUrl, machineToken: d.machineToken, hub: remoteHub, version: 'tracker' });
+}
+
+async function hubFetch(url, opts) {
+  try {
+    const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(15e3) });
+    let j = {};
+    try { j = await r.json(); } catch {}
+    return { ok: r.ok, j };
+  } catch (err) {
+    throw new remote.RemoteError('HUB_UNREACHABLE', `Không kết nối được hub: ${err.cause ? err.cause.code || err.cause.message : err.message}`);
+  }
+}
+
+// POST /api/hub/pair {hubUrl, username, password, name} | /api/hub/unpair — chỉ từ dashboard (guardPost).
+async function hubApi(req, url, json) {
+  const m = /^\/api\/hub\/(pair|unpair)$/.exec(url.pathname);
+  if (!m || req.method !== 'POST') return null;
+  if (!guardPost(req)) return false;
+  let body = {};
+  try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch {}
+  if (m[1] === 'pair') {
+    const hubUrl = String(body.hubUrl || DEFAULT_HUB).trim().replace(/\/+$/, '');
+    if (!/^https?:\/\/[^\s/]+$/i.test(hubUrl)) throw new remote.RemoteError('FORMAT', 'Địa chỉ hub phải dạng https://ten-mien');
+    const name = String(body.name || os.hostname()).trim().slice(0, 60);
+    const r = await hubFetch(`${hubUrl}/v1/machines/pair`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: body.username, password: body.password, machineName: name }),
+    });
+    if (!r.ok || !r.j.machineToken) throw new remote.RemoteError(r.j.error || 'HUB_ERROR', r.j.message || 'Hub từ chối ghép máy');
+    writeJSON(HUB_FILE, { hubUrl, machineId: r.j.machineId, machineToken: r.j.machineToken, name: r.j.name || name, pairedAt: Date.now() });
+    startHubLink();
+  } else {
+    const d = readJSON(HUB_FILE, null);
+    if (hubLink) { hubLink.stop(); hubLink = null; }
+    if (d && d.machineToken) {
+      await hubFetch(`${d.hubUrl}/v1/machines/unpair`, { method: 'POST', headers: { Authorization: `Bearer ${d.machineToken}` } }).catch(() => {});
+    }
+    try { fs.unlinkSync(HUB_FILE); } catch {}
+  }
+  json(hubInfo());
+  return true;
+}
+
 // Xử lý /api/remote*: ghép điện thoại, thu hồi, ntfy, Tailscale. Cùng luật như /api/accounts (POST chỉ từ dashboard).
 let tsCache = null;
 async function remoteApi(req, url, json) {
@@ -645,7 +708,7 @@ async function remoteApi(req, url, json) {
     const d = remote.load();
     const pair = d.pair && d.pair.expiresAt > Date.now() ? { code: d.pair.code, expiresAt: d.pair.expiresAt } : null;
     const live = remoteHub ? [...remoteHub.sessions.values()].filter((x) => x.proc).length : 0;
-    return json({ port: remote.REMOTE_PORT, enabled: !!remoteHub, devices: remote.devices(), pair, ntfy: d.ntfy, tailscale: tsCache.v, live, hooks: remote.hooksStatus(), alwaysOn: remote.alwaysOn() }), true;
+    return json({ port: remote.REMOTE_PORT, enabled: !!remoteHub, devices: remote.devices(), pair, ntfy: d.ntfy, tailscale: tsCache.v, live, hooks: remote.hooksStatus(), alwaysOn: remote.alwaysOn(), hub: hubInfo() }), true;
   }
   const m = /^\/api\/remote\/(pair|revoke|ntfy|ntfy-test|serve|hooks|always-on)$/.exec(url.pathname);
   if (!m || req.method !== 'POST') return null;
@@ -678,6 +741,11 @@ function createServer() {
       }
       if (url.pathname.startsWith('/api/accounts')) {
         const r = await accountsApi(req, url, (d) => json(res, d));
+        if (r === false) return send(res, 403, 'application/json; charset=utf-8', JSON.stringify({ error: 'FORBIDDEN', message: 'Yêu cầu bị từ chối' }));
+        if (r !== null) return;
+      }
+      if (url.pathname.startsWith('/api/hub/')) {
+        const r = await hubApi(req, url, (d) => json(res, d));
         if (r === false) return send(res, 403, 'application/json; charset=utf-8', JSON.stringify({ error: 'FORBIDDEN', message: 'Yêu cầu bị từ chối' }));
         if (r !== null) return;
       }
@@ -772,6 +840,7 @@ function serve() {
         accounts: () => { const { rows, now } = analyze(); return accountsInfo(rows, now); },
         switchAccount: (id) => accounts.switchTo(id),
       }).hub;
+      startHubLink();   // đã ghép với hub trên VPS -> kết nối ra hub
     }
   });
 }

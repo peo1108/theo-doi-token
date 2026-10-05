@@ -507,3 +507,42 @@ test('refreshUsage: tài khoản đang trong file hỏi lại sau ~1 phút, tài
   await T.refreshUsage(t + 5 * 60e3 + 1e3, okFetch({ 'at-1': util(12, 12), 'at-2': util(22, 22) }, calls2));
   assert.deepEqual(calls2.sort(), ['at-1', 'at-2']);
 });
+
+// ---- ghép PC với hub (VPS) ----
+
+test('api/hub: ghép qua hub thật lưu token, không lưu mật khẩu; sai mật khẩu 400; thiếu header 403; ngắt thì xoá file và thu hồi trên hub', async () => {
+  reset();
+  const { startHub } = require('./hub-helpers.js');
+  const H = await startHub();
+  const hubFile = path.join(env.dataDir, 'hub.json');
+  try {
+    await H.h.cli(['init', 'cam', 'mat-khau-cam']);
+    await withServer(async ({ call }) => {
+      const body = (o) => JSON.stringify(o);
+      const pairBody = { hubUrl: H.base, username: 'cam', password: 'mat-khau-cam', name: 'pc-test' };
+      assert.equal((await call('POST', '/api/hub/pair', { body: body(pairBody) })).status, 403, 'thiếu X-Token-Tracker');
+      const bad = await call('POST', '/api/hub/pair', { headers: CSRF, body: body({ ...pairBody, password: 'sai-mat-khau' }) });
+      assert.equal(bad.status, 400);
+      assert.equal(bad.json().error, 'BAD_LOGIN');
+      assert.equal((await call('POST', '/api/hub/pair', { headers: CSRF, body: body({ ...pairBody, hubUrl: 'ftp://x' }) })).json().error, 'FORMAT');
+      const ok = await call('POST', '/api/hub/pair', { headers: CSRF, body: body(pairBody) });
+      assert.equal(ok.status, 200, ok.text);
+      assert.equal(ok.json().paired, true);
+      const saved = JSON.parse(fs.readFileSync(hubFile, 'utf8'));
+      assert.equal(saved.hubUrl, H.base);
+      assert.ok(saved.machineToken && saved.machineId);
+      assert.ok(!fs.readFileSync(hubFile, 'utf8').includes('mat-khau-cam'), 'không lưu mật khẩu');
+      const user = H.h.db.userByName('cam');
+      assert.deepEqual(H.h.db.machines(user.id).map((m) => m.name), ['pc-test']);
+      const st = (await call('GET', '/api/remote')).json().hub;
+      assert.equal(st.paired, true);
+      assert.equal(st.name, 'pc-test');
+      assert.ok(!JSON.stringify(st).includes(saved.machineToken), 'không trả token ra dashboard');
+      assert.equal((await call('POST', '/api/hub/unpair', {})).status, 403);
+      const un = await call('POST', '/api/hub/unpair', { headers: CSRF });
+      assert.equal(un.json().paired, false);
+      assert.ok(!fs.existsSync(hubFile));
+      assert.deepEqual(H.h.db.machines(user.id), [], 'token máy bị thu hồi trên hub');
+    });
+  } finally { await H.stop(); try { fs.unlinkSync(hubFile); } catch {} }
+});

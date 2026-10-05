@@ -102,6 +102,13 @@ function createHubServer({ dataDir = process.env.HUB_DATA || path.join(__dirname
       if (d) { db.revokeDevice(d.user_id, d.id); router.closeWhere((c) => c.role === 'app' && c.deviceId === d.id); }
       return { ok: true };
     },
+    // PC tự ngắt khỏi hub (nút "Ngắt" trên dashboard): thu hồi chính token máy đang gửi
+    async 'POST /v1/machines/unpair'(b, ip, req) {
+      const h = String(req.headers.authorization || '');
+      const m = h.startsWith('Bearer ') && db.machineByToken(auth.sha(h.slice(7).trim()));
+      if (m) { db.revokeMachine(m.user_id, m.id); router.closeWhere((c) => c.role === 'agent' && c.machineId === m.id); db.audit(m.user_id, ip, 'unpair', m.name); }
+      return { ok: true };
+    },
     async 'POST /v1/machines/pair'(b, ip) {
       const u = await checkLogin(b.username, b.password, ip);
       const t = auth.newToken();

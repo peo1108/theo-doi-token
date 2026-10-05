@@ -311,6 +311,11 @@
   .rm-ntfy input { flex: 1; min-width: 0; font: inherit; font-size: 13px; color: var(--text); background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; outline: none; }
   .rm-ntfy input:focus { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-soft); }
   .rm-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .rm-step.wide { grid-column: 1 / -1; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+  .rm-hub { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; align-items: center; }
+  .rm-hub input { flex: 1 1 160px; min-width: 0; font: inherit; font-size: 13px; color: var(--text); background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; outline: none; }
+  .rm-hub input.url { flex-basis: 260px; }
+  .rm-hub input:focus { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-soft); }
   @media (max-width: 1100px) { .rm-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width: 700px) { .rm-grid { grid-template-columns: minmax(0, 1fr); } }
 
@@ -2095,7 +2100,8 @@ function renderRemote() {
   const box = els('rmBody');
   if (!RM) return;
   if (RM.error) { box.innerHTML = `<div class="empty">Không tải được: ${esc(RM.error)}</div>`; return; }
-  if (document.activeElement && document.activeElement.id === 'rmTopic') return;   // đang gõ topic: không vẽ lại
+  const typing = document.activeElement && /^(rmTopic|hub)/.test(document.activeElement.id || '');
+  if (typing) return;   // đang gõ: không vẽ lại
   const ts = RM.tailscale || {};
   const dis = RM_BUSY ? 'disabled' : '';
   let step1;
@@ -2135,7 +2141,23 @@ function renderRemote() {
       <div class="rm-actions"><button class="ghost sm" data-rm="always-toggle" ${dis}>${RM.alwaysOn ? 'Tắt luôn sẵn sàng' : 'Bật luôn sẵn sàng'}</button><button class="ghost sm" data-rm="hooks-off" ${dis}>Gỡ hook</button></div>`
     : `${statusHTML('info', hk.partial ? 'Cài thiếu' : 'Chưa cài')}<p>Cho điện thoại gửi tin và duyệt quyền ngay trong phiên Claude Code đang mở trên máy (VS Code, terminal). Thêm hook vào <span class="rm-url">~/.claude/settings.json</span> (có sao lưu).</p>
       <div class="rm-actions"><button class="ghost sm primary" data-rm="hooks-on" ${dis}>Cài hook</button></div>`);
-  box.innerHTML = `<div class="rm-step"><h3>1 · Kết nối</h3>${step1}</div>
+  // Hub trên VPS: điện thoại vào qua internet, không cần Tailscale
+  const hb = RM.hub || { paired: false };
+  const hubState = { online: ['good', 'Đã kết nối hub'], connecting: ['warn', 'Đang kết nối hub…'], revoked: ['warn', 'Bị ngắt khỏi hub'], upgrade: ['warn', 'Cần cập nhật tracker'], off: ['info', 'Chưa chạy'] }[hb.state] || ['info', hb.state];
+  const stepHub = hb.paired
+    ? `${statusHTML(hubState[0], hubState[1])}
+      <p>Máy <b>${esc(hb.name)}</b> · <span class="rm-url">${esc(hb.hubUrl)}</span>${hb.error ? ` · ${esc(hb.error)}` : ''}</p>
+      <p>Trên app: đăng nhập cùng tài khoản hub là thấy máy này — không cần Tailscale, không cần mã ghép.</p>
+      <div class="rm-actions"><button class="ghost sm" data-rm="hub-unpair" ${dis}>Ngắt khỏi hub</button></div>`
+    : `${statusHTML('info', 'Chưa ghép với hub')}
+      <p>Đăng nhập tài khoản hub (do admin mời) để điện thoại điều khiển máy này qua internet. Mật khẩu chỉ dùng một lần để lấy khoá máy, không lưu lại.</p>
+      <div class="rm-hub"><input id="hubUrl" class="url" value="${esc(hb.defaultUrl || '')}" spellcheck="false" autocomplete="off" placeholder="https://…">
+        <input id="hubUser" placeholder="tên đăng nhập" spellcheck="false" autocomplete="username">
+        <input id="hubPass" type="password" placeholder="mật khẩu" autocomplete="current-password">
+        <button class="ghost sm primary" data-rm="hub-pair" ${dis}>Ghép máy</button></div>`;
+
+  box.innerHTML = `<div class="rm-step wide"><h3>Hub (VPS) · không cần Tailscale</h3>${stepHub}</div>
+    <div class="rm-step"><h3>1 · Kết nối</h3>${step1}</div>
     <div class="rm-step"><h3>2 · Ghép điện thoại</h3>${step2}</div>
     <div class="rm-step"><h3>3 · Thông báo khi app đóng</h3>${step3}</div>
     <div class="rm-step"><h3>4 · Điều khiển phiên VS Code</h3>${step4}</div>`;
@@ -2158,6 +2180,12 @@ els('rmBody').addEventListener('click', async e => {
     else if (act === 'always-toggle') { const r = await acctPost('/api/remote/always-on', { on: !RM.alwaysOn }); setRmMsg('ok', r.alwaysOn ? 'Đã bật luôn sẵn sàng' : 'Đã tắt luôn sẵn sàng'); }
     else if (act === 'hooks-on' || act === 'hooks-off') { const r = await acctPost('/api/remote/hooks', { on: act === 'hooks-on' }); setRmMsg('ok', r.installed ? 'Đã cài hook — mở lại phiên Claude Code là điện thoại điều khiển được' : 'Đã gỡ hook'); }
     else if (act === 'ntfy-test') { const r = await acctPost('/api/remote/ntfy-test'); setRmMsg(r.ok ? 'ok' : 'err', r.ok ? 'Đã gửi — kiểm tra app ntfy' : 'Gửi không được'); }
+    else if (act === 'hub-pair') {
+      await acctPost('/api/hub/pair', { hubUrl: els('hubUrl').value, username: els('hubUser').value, password: els('hubPass').value });
+      els('hubPass').value = '';
+      setRmMsg('ok', 'Đã ghép máy với hub — đăng nhập cùng tài khoản trên app');
+    }
+    else if (act === 'hub-unpair') { if (!confirm('Ngắt máy này khỏi hub? Điện thoại sẽ không thấy máy này nữa.')) throw new Error('Đã huỷ'); await acctPost('/api/hub/unpair'); setRmMsg('ok', 'Đã ngắt khỏi hub'); }
     else if (act === 'serve') { const r = await acctPost('/api/remote/serve'); setRmMsg(r.ok ? 'ok' : 'err', r.ok ? 'Đã mở cho điện thoại' : 'Tailscale báo: ' + r.output); }
   } catch (err) { setRmMsg('err', err.message); }
   RM_BUSY = false;
