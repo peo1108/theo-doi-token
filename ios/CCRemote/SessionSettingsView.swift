@@ -153,8 +153,16 @@ struct CommandSuggestions: View {
     }
 
     var body: some View {
-        if !matches.isEmpty {
-            ScrollView {
+        if matches.count > 4 {
+            ScrollView { list }
+                .frame(height: 260)
+                .background(.bar)
+        } else if !matches.isEmpty {
+            list.background(.bar)
+        }
+    }
+
+    private var list: some View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(matches) { c in
                         Button { onPick(c) } label: {
@@ -177,9 +185,5 @@ struct CommandSuggestions: View {
                         Divider().padding(.leading, 14)
                     }
                 }
-            }
-            .frame(maxHeight: 260)
-            .background(.bar)
-        }
     }
 }

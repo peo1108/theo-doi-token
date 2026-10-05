@@ -491,6 +491,13 @@ class Session {
     for (const c of this.clients) c.send(st);
   }
 
+  // 'Default (recommended)' -> tên model thật mà nó trỏ tới (vd. Opus 5.5)
+  modelName(info, caps) {
+    if (info.value !== 'default') return info.label;
+    const real = caps.models.find((m) => m.value !== 'default' && m.resolved === info.resolved);
+    return real ? real.label : info.label;
+  }
+
   // Giá trị đang có hiệu lực (tuỳ chọn của phiên, nếu không thì settings.json của máy).
   effective() {
     const us = userSettings();
@@ -499,7 +506,7 @@ class Session {
     const info = caps && caps.models.find((m) => m.value === want || m.resolved === want);
     const perModel = (us.modelSettings && info && us.modelSettings[info.resolved]) || {};
     return {
-      model: this.model, modelValue: info ? info.value : want, modelLabel: info ? info.label : want === 'default' ? 'Mặc định' : want,
+      model: this.model, modelValue: info ? info.value : want, modelLabel: info ? this.modelName(info, caps) : want === 'default' ? 'Mặc định' : want,
       effort: this.opts.effort ?? perModel.effortLevel ?? us.effortLevel ?? null,
       thinking: this.opts.thinking ?? us.alwaysThinkingEnabled ?? true,
       flagSwitch: this.opts.flagSwitch ?? us.switchModelsOnFlag ?? true,
