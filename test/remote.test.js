@@ -621,3 +621,35 @@ test('hook không bao giờ chặn nhầm khi server trả lỗi (vd. tracker b�
   }
   bad.close();
 });
+
+// ---------- call(): lõi dùng chung cho HTTP cũ và hub ----------
+
+test('call: state, tạo / gửi / duyệt quyền / ngắt / đóng phiên qua call như qua HTTP; hàm lạ -> NOT_FOUND', async () => {
+  const st = await R.call(hub, 'state', {});
+  assert.ok(Array.isArray(st.live) && Array.isArray(st.projects));
+  const s = await R.call(hub, 'sessions.create', { cwd: WORK, text: 'mở qua call' });
+  assert.match(s.id, /^[0-9a-f-]{36}$/);
+  await watch(s.id, has('assistant', (e) => e.text === 'echo: mở qua call'));
+  const viaHttp = (await api('GET', `/v1/sessions/${s.id}`)).body;
+  const viaCall = await R.call(hub, 'sessions.get', { id: s.id.toUpperCase() });
+  assert.equal(viaCall.id, viaHttp.id);
+  assert.equal(viaCall.status, viaHttp.status);
+  // xin quyền -> duyệt qua call
+  await R.call(hub, 'sessions.send', { id: s.id, text: 'PERM qua call' });
+  const pe = (await watch(s.id, has('permission'), { after: viaCall.lastSeq })).find((e) => e.kind === 'permission');
+  await R.call(hub, 'sessions.permission', { id: s.id, requestId: pe.requestId, decision: 'allow' });
+  await watch(s.id, has('assistant', (e) => e.text.startsWith('allowed')), { after: viaCall.lastSeq });
+  // ngắt lúc đang chạy
+  await R.call(hub, 'sessions.send', { id: s.id, text: 'SLOW qua call' });
+  await watch(s.id, has('assistant', (e) => e.text === 'working...'), { after: viaCall.lastSeq });
+  await R.call(hub, 'sessions.interrupt', { id: s.id });
+  await watch(s.id, has('note', (e) => e.text === 'Đã ngắt'), { after: viaCall.lastSeq });
+  assert.equal((await R.call(hub, 'sessions.mode', { id: s.id, mode: 'plan' })).mode, 'plan');
+  await R.call(hub, 'sessions.close', { id: s.id });
+  await until(() => !hub.get(s.id, { load: false }).proc);
+  await assert.rejects(R.call(hub, 'sessions.get', { id: 'không-phải-id' }), (e) => e.code === 'NOT_FOUND');
+  await assert.rejects(R.call(hub, 'sessions.get', { id: '00000000-0000-0000-0000-00000000dead' }), (e) => e.code === 'NOT_FOUND');
+  await assert.rejects(R.call(hub, 'không có hàm này', {}), (e) => e.code === 'NOT_FOUND');
+  await assert.rejects(R.call(hub, 'projects.sessions', {}), (e) => e.code === 'FORMAT');
+  assert.equal((await R.call(hub, 'alwaysOn', { on: true })).alwaysOn, true);
+});

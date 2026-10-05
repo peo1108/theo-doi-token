@@ -1383,6 +1383,53 @@ function bearer(req) {
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
+// ---------- lõi dùng chung: HTTP cũ (Tailscale) và hub (hub-link.js) đều gọi call() ----------
+
+const SESSION_METHODS = ['sessions.get', 'sessions.send', 'sessions.permission', 'sessions.interrupt', 'sessions.mode',
+  'sessions.model', 'sessions.settings', 'sessions.attach', 'sessions.close'];
+
+async function call(hub, method, params = {}) {
+  const p = params && typeof params === 'object' ? params : {};
+  switch (method) {
+    case 'state': return hub.state();
+    case 'projects': return projects();
+    case 'projects.sessions':
+      if (!p.cwd) throw new RemoteError('FORMAT', 'Thiếu cwd');
+      return projectSessions(String(p.cwd));
+    case 'capabilities': {
+      const caps = await hub.capabilities();
+      return { ...(caps || { models: [], commands: [], outputStyles: ['default'], account: null }), efforts: EFFORTS, defaults: hub.defaults() };
+    }
+    case 'sessions.create': return hub.create(p).summary();
+    case 'accounts.switch': return hub.switchAccount(String(p.id || ''), { sessionId: p.sessionId, text: p.text });
+    case 'alwaysOn': return { alwaysOn: setAlwaysOn(p.on !== false) };
+  }
+  if (!SESSION_METHODS.includes(method)) throw new RemoteError('NOT_FOUND', 'Không có hàm này', 404);
+  const id = String(p.id || '').toLowerCase();
+  const s = UUID.test(id) && hub.get(id, { load: method === 'sessions.get' });
+  if (!s) throw new RemoteError('NOT_FOUND', 'Không tìm thấy phiên', 404);
+  if (method === 'sessions.send') s.send(p.text);
+  else if (method === 'sessions.permission') s.decide(String(p.requestId || ''), p);
+  else if (method === 'sessions.interrupt') s.interrupt();
+  else if (method === 'sessions.mode') s.setMode(p.mode);
+  else if (method === 'sessions.model') s.setModel(p.model);
+  else if (method === 'sessions.settings') s.applySettings(p);
+  else if (method === 'sessions.attach') s.attach(p.on !== false);
+  else if (method === 'sessions.close') s.close();
+  return s.summary();
+}
+
+// Đường dẫn HTTP cũ -> { method, params } của call().
+function httpRoute(verb, p, url) {
+  const get = { '/v1/state': 'state', '/v1/projects': 'projects', '/v1/projects/sessions': 'projects.sessions', '/v1/capabilities': 'capabilities' };
+  const post = { '/v1/sessions': 'sessions.create', '/v1/accounts/switch': 'accounts.switch', '/v1/always-on': 'alwaysOn' };
+  if (verb === 'GET' && get[p]) return { method: get[p], params: p === '/v1/projects/sessions' ? { cwd: url.searchParams.get('cwd') || '' } : {} };
+  if (verb === 'POST' && post[p]) return { method: post[p], params: {} };
+  const m = /^\/v1\/sessions\/([0-9a-f-]{36})(?:\/(send|permission|interrupt|mode|model|settings|attach|close))?$/i.exec(p);
+  if (!m || (verb === 'GET') === !!m[2] || (verb !== 'GET' && verb !== 'POST')) return null;
+  return { method: m[2] ? `sessions.${m[2]}` : 'sessions.get', params: { id: m[1] } };
+}
+
 function createRemoteServer(hub) {
   try { hookKey(); } catch {}   // để hook.js đọc được khoá ngay từ lần đầu
   const send = (res, code, data) => {
@@ -1445,51 +1492,21 @@ function createRemoteServer(hub) {
       const dev = authDevice(bearer(req));
       if (!dev) return send(res, 401, { error: 'UNAUTHORIZED', message: 'Thiết bị chưa ghép hoặc đã bị thu hồi' });
 
-      if (p === '/v1/state' && req.method === 'GET') return send(res, 200, hub.state());
-      if (p === '/v1/projects' && req.method === 'GET') return send(res, 200, projects());
-      if (p === '/v1/projects/sessions' && req.method === 'GET') {
-        const cwd = url.searchParams.get('cwd') || '';
-        if (!cwd) return send(res, 400, { error: 'FORMAT', message: 'Thiếu cwd' });
-        return send(res, 200, projectSessions(cwd));
-      }
-      if (p === '/v1/capabilities' && req.method === 'GET') {
-        const caps = await hub.capabilities();
-        return send(res, 200, { ...(caps || { models: [], commands: [], outputStyles: ['default'], account: null }), efforts: EFFORTS, defaults: hub.defaults() });
-      }
-      if (p === '/v1/sessions' && req.method === 'POST') {
-        const b = await jsonBody(req);
-        return send(res, 200, hub.create(b).summary());
-      }
-      if (p === '/v1/accounts/switch' && req.method === 'POST') {
-        const b = await jsonBody(req);
-        return send(res, 200, hub.switchAccount(String(b.id || ''), { sessionId: b.sessionId, text: b.text }));
-      }
+      // ntfy phía PC chỉ còn cho đường cũ (Tailscale); qua hub thì hub lo thông báo
       if (p === '/v1/ntfy' && req.method === 'POST') return send(res, 200, { ntfy: setNtfy(await jsonBody(req)) });
-      if (p === '/v1/always-on' && req.method === 'POST') return send(res, 200, { alwaysOn: setAlwaysOn((await jsonBody(req)).on !== false) });
       if (p === '/v1/ntfy/test' && req.method === 'POST') {
         return send(res, 200, { ok: await hub.notify('CC Remote', 'Thông báo hoạt động bình thường', null) });
       }
-
-      const m = /^\/v1\/sessions\/([0-9a-f-]{36})(?:\/(events|send|permission|interrupt|mode|model|settings|attach|close))?$/i.exec(p);
-      if (!m) return send(res, 404, { error: 'NOT_FOUND', message: 'Không có' });
-      const s = hub.get(m[1].toLowerCase(), { load: !m[2] || m[2] === 'events' });
-      if (!s) return send(res, 404, { error: 'NOT_FOUND', message: 'Không tìm thấy phiên' });
-      const action = m[2];
-      if (!action && req.method === 'GET') return send(res, 200, s.summary());
-      if (action === 'events' && req.method === 'GET') {
+      const sm = /^\/v1\/sessions\/([0-9a-f-]{36})\/events$/i.exec(p);
+      if (sm && req.method === 'GET') {
+        const s = hub.get(sm[1].toLowerCase());
+        if (!s) return send(res, 404, { error: 'NOT_FOUND', message: 'Không tìm thấy phiên' });
         return stream(req, res, s, Number(url.searchParams.get('after')) || 0, url.searchParams.get('epoch') || '');
       }
-      if (req.method !== 'POST') return send(res, 405, { error: 'METHOD', message: 'Sai phương thức' });
-      const b = await jsonBody(req);
-      if (action === 'send') s.send(b.text);
-      else if (action === 'permission') s.decide(String(b.requestId || ''), b);
-      else if (action === 'interrupt') s.interrupt();
-      else if (action === 'mode') s.setMode(b.mode);
-      else if (action === 'model') s.setModel(b.model);
-      else if (action === 'settings') s.applySettings(b);
-      else if (action === 'attach') s.attach(b.on !== false);
-      else if (action === 'close') s.close();
-      return send(res, 200, s.summary());
+      const r = httpRoute(req.method, p, url);
+      if (!r) return send(res, 404, { error: 'NOT_FOUND', message: 'Không có' });
+      const params = req.method === 'POST' ? { ...(await jsonBody(req)), ...r.params } : r.params;
+      return send(res, 200, await call(hub, r.method, params));
     } catch (err) {
       if (err instanceof RemoteError) return send(res, err.status, { error: err.code, message: err.message });
       console.error('remote:', err);
@@ -1684,7 +1701,7 @@ module.exports = {
   hookKey, phoneTag, hooksStatus, installHooks, uninstallHooks,
   RemoteError, load, newPairCode, pair, authDevice, devices, revoke, setNtfy, notify,
   findClaude, normalize, cleanUserText, toolSummary, readTranscript, recentSessions, projects, projectSessions, sessionFile,
-  Session, createHub, createRemoteServer, start, tailscaleInfo, tailscaleServe, REMOTE_PORT, MODES,
+  Session, createHub, createRemoteServer, call, start, tailscaleInfo, tailscaleServe, REMOTE_PORT, MODES,
 };
 
 // ---------- dòng lệnh ----------
