@@ -125,10 +125,12 @@ final class SessionModel {
         }
     }
 
-    func send(_ text: String, api: APIClient) async -> Bool {
+    func send(_ text: String, images: [[String: Any]] = [], api: APIClient) async -> Bool {
         sending = true
         defer { sending = false }
-        await post(api, "send", ["text": text])
+        var body: [String: Any] = ["text": text]
+        if !images.isEmpty { body["images"] = images }
+        await post(api, "send", body)
         return lastError == nil
     }
 

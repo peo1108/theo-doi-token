@@ -61,6 +61,11 @@ struct PairView: View {
                     }
                     .disabled(busy || url.trimmingCharacters(in: .whitespaces).isEmpty || code.count != 6)
                 }
+
+                Section {
+                    Button("Đăng nhập hub (không cần Tailscale)") { app.setMode("hub") }
+                        .font(.footnote)
+                }
             }
             .navigationTitle("CC Remote")
         }

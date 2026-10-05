@@ -69,6 +69,9 @@ struct HomeView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showNew = true } label: { Image(systemName: "square.and.pencil") }
             }
+            if app.isHub {
+                ToolbarItem(placement: .principal) { MachinePicker() }
+            }
         }
         .sheet(isPresented: $showNew) { NewSessionView() }
         .sheet(isPresented: $showSettings) { SettingsView() }

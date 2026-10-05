@@ -58,8 +58,22 @@ server.listen(Number(process.env.SMOKE_PORT) || 7789, '127.0.0.1', async () => {
   const ideSession = hub.bridgeFor({ session_id: ide, transcript_path: ideFile, cwd: work, entrypoint: 'claude-vscode' });
   ideSession.attach(true);
 
+  // hub thật (chế độ VPS) trên cổng 7790: tài khoản "smoke", máy này đã ghép và nối qua hub-link
+  const { createHubServer } = require('../../hub/hub.js');
+  const { startLink } = require('../../hub-link.js');
+  const H = createHubServer({ dataDir: path.join(dir, 'hub') });
+  const hubPort = Number(process.env.SMOKE_HUB_PORT) || 7790;
+  await new Promise((r) => H.server.listen(hubPort, '127.0.0.1', r));
+  const hubBase = `http://127.0.0.1:${hubPort}`;
+  await H.cli(['init', 'smoke', 'mat-khau-smoke']);
+  const post = async (p, b) => (await fetch(hubBase + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) })).json();
+  const login = await post('/v1/auth/login', { username: 'smoke', password: 'mat-khau-smoke', deviceName: 'Simulator' });
+  const pairM = await post('/v1/machines/pair', { username: 'smoke', password: 'mat-khau-smoke', machineName: 'PC-smoke' });
+  startLink({ hubUrl: hubBase, machineToken: pairM.machineToken, hub });
+
   await new Promise((r) => setTimeout(r, 1500));
-  const out = { token, chat: chat.id, perm: perm.id, ask: ask.id, limit: limit.id, ide, work, ponder: ponder.id };
+  const out = { token, chat: chat.id, perm: perm.id, ask: ask.id, limit: limit.id, ide, work, ponder: ponder.id,
+    hubURL: hubBase, hubToken: login.token, machineId: pairM.machineId };
   fs.writeFileSync(path.join(dir, 'smoke.json'), JSON.stringify(out));
   console.log('smoke ready', JSON.stringify(out));
 });

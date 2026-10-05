@@ -12,6 +12,7 @@ struct CCRemoteApp: App {
                 .onOpenURL { app.open(url: $0) }
         }
         .onChange(of: phase) { _, p in
+            app.hub?.setForeground(p == .active)   // hub chỉ đẩy ntfy khi không app nào đang mở
             if p == .active {
                 KeepAlive.shared.stop()
                 Task { await app.refresh() }
@@ -46,6 +47,8 @@ struct RootView: View {
                     if Notifier.shared.enabled { await Notifier.shared.requestPermission() }
                     await app.poll()
                 }
+            } else if app.isHub {
+                LoginView()
             } else {
                 PairView()
             }

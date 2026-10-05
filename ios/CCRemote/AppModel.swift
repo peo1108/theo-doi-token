@@ -14,9 +14,22 @@ final class AppModel {
     var path = NavigationPath()
     var caps: Capabilities?
 
-    var isPaired: Bool { token != nil && !baseURL.isEmpty }
+    // ---- chế độ hub (VPS): đăng nhập tài khoản, điện thoại không cần Tailscale ----
+    static let defaultHub = "https://clauderc.caesarvn.xyz"
+    /// "hub" | "tailscale" (đường cũ: ghép mã 6 số qua Tailscale)
+    var mode: String = UserDefaults.standard.string(forKey: "mode") ?? (SecureStore.get("token") != nil ? "tailscale" : "hub")
+    var hubURL: String = UserDefaults.standard.string(forKey: "hubURL") ?? AppModel.defaultHub
+    var hubToken: String? = SecureStore.get("hubToken")
+    var machineId: String = UserDefaults.standard.string(forKey: "machineId") ?? ""
+    var hub: HubClient?
+
+    var isHub: Bool { mode == "hub" }
+    var isPaired: Bool { isHub ? hubToken != nil : (token != nil && !baseURL.isEmpty) }
+    var machines: [HubMachine] { hub?.machines ?? [] }
+    var currentMachine: HubMachine? { machines.first { $0.id == machineId } }
 
     init() {
+        if mode == "hub", let t = hubToken { startHub(token: t) }
         // `-openSession <id>` khi khởi chạy (dùng cho kiểm tra trên Simulator)
         if let id = UserDefaults.standard.string(forKey: "openSession"), id.count == 36 {
             path.append(Route.session(id))
@@ -27,8 +40,91 @@ final class AppModel {
     }
 
     var api: APIClient? {
+        if isHub {
+            guard let hub, !machineId.isEmpty else { return nil }
+            return APIClient(base: hubURL, token: nil, hub: hub, machine: machineId)
+        }
         guard let token, !baseURL.isEmpty else { return nil }
         return APIClient(base: baseURL, token: token)
+    }
+
+    private func startHub(token: String) {
+        hub?.stop()
+        let h = HubClient(base: hubURL, token: token)
+        h.onUnauthorized = { [weak self] in self?.logout(remote: false) }
+        h.onSessionsChanged = { [weak self] m in
+            guard let self, m == self.machineId else { return }
+            Task { await self.refresh() }
+        }
+        hub = h
+        h.start()
+    }
+
+    /// Chọn máy: giữ máy đã chọn nếu còn; không thì máy online đầu tiên.
+    func pickMachine() {
+        if let m = currentMachine, m.online { return }
+        if let m = machines.first(where: { $0.online }) ?? (currentMachine == nil ? machines.first : nil) { selectMachine(m.id) }
+    }
+
+    func selectMachine(_ id: String) {
+        guard id != machineId else { return }
+        machineId = id
+        UserDefaults.standard.set(id, forKey: "machineId")
+        state = nil
+        caps = nil
+        path = NavigationPath()
+        Task { await refresh() }
+    }
+
+    /// Đăng nhập (hoặc đăng ký bằng mã mời) vào hub. Token dùng mãi tới khi tự đăng xuất.
+    func login(url raw: String, username: String, password: String, invite: String? = nil) async throws {
+        let base = APIClient.normalize(raw.isEmpty ? AppModel.defaultHub : raw)
+        let open = APIClient(base: base, token: nil)
+        var body: [String: Any] = ["username": username.trimmingCharacters(in: .whitespaces), "password": password, "deviceName": UIDevice.current.name]
+        let path: String
+        if let invite, !invite.trimmingCharacters(in: .whitespaces).isEmpty { body["invite"] = invite; path = "/v1/auth/register" } else { path = "/v1/auth/login" }
+        let r: HubLoginResponse = try await open.call("POST", path, body: body)
+        hubURL = base
+        hubToken = r.token
+        mode = "hub"
+        UserDefaults.standard.set(base, forKey: "hubURL")
+        UserDefaults.standard.set("hub", forKey: "mode")
+        SecureStore.set(r.token, for: "hubToken")
+        lastError = nil
+        startHub(token: r.token)
+        await hub?.ready()
+        pickMachine()
+        await refresh()
+    }
+
+    /// Đăng xuất khỏi hub (chỉ khi người dùng bấm, hoặc hub báo token đã bị thu hồi).
+    func logout(remote: Bool = true) {
+        if remote, let t = hubToken {
+            let open = APIClient(base: hubURL, token: t)
+            Task { let _: Ignored? = try? await open.call("POST", "/v1/auth/logout") }
+        }
+        hub?.stop()
+        hub = nil
+        hubToken = nil
+        state = nil
+        SecureStore.set(nil, for: "hubToken")
+        path = NavigationPath()
+    }
+
+    /// Hàm của chính hub: thiết bị, máy, đổi mật khẩu, ntfy...
+    func hubCall<T: Decodable>(_ method: String, _ params: [String: Any] = [:]) async throws -> T {
+        guard let hub else { throw APIError(code: "UNPAIRED", message: "Chưa đăng nhập hub") }
+        let d = try await hub.call(machine: "hub", method: method, params: params)
+        return try JSONDecoder().decode(T.self, from: d)
+    }
+
+    /// Chuyển giữa hub và Tailscale (cũ) — không xoá đăng nhập của chế độ kia.
+    func setMode(_ m: String) {
+        mode = m
+        UserDefaults.standard.set(m, forKey: "mode")
+        state = nil
+        path = NavigationPath()
+        if m == "hub", let t = hubToken { startHub(token: t) } else { hub?.stop(); hub = nil }
     }
 
     func pair(url raw: String, code: String) async throws {
@@ -59,6 +155,11 @@ final class AppModel {
     }
 
     func refresh() async {
+        if isHub {
+            pickMachine()
+            if api == nil { state = nil; lastError = hub?.lastError; return }
+            if currentMachine?.online == false { lastError = "Máy \(currentMachine?.name ?? "") đang tắt hoặc chưa chạy tracker"; return }
+        }
         guard let api else { return }
         do {
             let st: RemoteState = try await api.call("GET", "/v1/state")

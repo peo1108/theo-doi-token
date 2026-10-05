@@ -31,6 +31,7 @@ jobs:
 
       - name: Start fake server
         run: |
+          (cd hub && npm ci --omit=dev --no-audit --no-fund)
           node ios/tools/smoke-server.js "$RUNNER_TEMP/smoke" > "$RUNNER_TEMP/server.log" 2>&1 &
           for i in $(seq 1 30); do test -f "$RUNNER_TEMP/smoke/smoke.json" && break; sleep 1; done
           cat "$RUNNER_TEMP/server.log"
@@ -109,6 +110,25 @@ jobs:
           shot 15-project 5
           open_s ponder
           shot 16-thinking 4
+
+          # chế độ hub (VPS): đăng nhập tài khoản, máy đã ghép, không cần Tailscale
+          xcrun simctl terminate "$UDID" vn.peo.ccremote || true
+          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote mode hub
+          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote hubURL "$(j hubURL)"
+          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote secure.hubToken "$(j hubToken)"
+          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote machineId "$(j machineId)"
+          xcrun simctl launch "$UDID" vn.peo.ccremote
+          shot 17-hub-home 6
+          open_s chat
+          shot 18-hub-chat 5
+          xcrun simctl terminate "$UDID" vn.peo.ccremote || true
+          xcrun simctl launch "$UDID" vn.peo.ccremote -openSession "$(j chat)" -openSettings YES
+          shot 19-hub-session-settings 5
+          # đăng xuất (xoá token) -> màn đăng nhập hub
+          xcrun simctl terminate "$UDID" vn.peo.ccremote || true
+          xcrun simctl spawn "$UDID" defaults delete vn.peo.ccremote secure.hubToken || true
+          xcrun simctl launch "$UDID" vn.peo.ccremote
+          shot 20-hub-login 4
           cat "$RUNNER_TEMP/server.log"
 
       - name: Upload screenshots

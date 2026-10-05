@@ -216,13 +216,15 @@ struct Event: Decodable, Identifiable, Hashable {
     let via: String?
     let seconds: Double?
     let tokens: Int?
+    /// ảnh gửi từ điện thoại (ảnh nhỏ base64; ảnh đầy đủ lấy bằng sessions.image)
+    let images: [EventImage]?
 
     var id: Int { seq }
 
     enum CodingKeys: String, CodingKey {
         case kind, seq, t, text, toolId = "id", name, summary, input, error, requestId, tool, canAlways, reason
         case questions, plan, decision, ok, aborted, cost, ms, turns, suggest, toolUseId
-        case title, path, code, oldText = "old", newText = "new", via, seconds, tokens
+        case title, path, code, oldText = "old", newText = "new", via, seconds, tokens, images
     }
 }
 
@@ -253,6 +255,34 @@ struct SwitchResponse: Decodable {
 }
 
 struct Ignored: Decodable {}
+
+struct EventImage: Decodable, Hashable {
+    let name: String
+    let thumb: String?
+}
+
+struct HubUser: Decodable {
+    let id: Int
+    let username: String
+    let admin: Bool
+}
+
+struct HubLoginResponse: Decodable {
+    let token: String
+    let user: HubUser
+}
+
+struct HubDevice: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let lastSeen: Double?
+    let current: Bool?
+}
+
+struct ImageData: Decodable {
+    let mime: String
+    let data: String
+}
 
 enum Route: Hashable {
     case session(String)

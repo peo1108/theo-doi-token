@@ -15,13 +15,17 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Máy tính") {
-                    LabeledContent("Tên máy", value: app.state?.host ?? "—")
-                    LabeledContent("Địa chỉ") {
-                        Text(app.baseURL).font(.footnote.monospaced()).textSelection(.enabled)
-                    }
-                    if let ok = app.lastOK {
-                        LabeledContent("Kết nối lần cuối", value: ok.formatted(date: .omitted, time: .standard))
+                if app.isHub {
+                    HubSettingsSection()
+                } else {
+                    Section("Máy tính") {
+                        LabeledContent("Tên máy", value: app.state?.host ?? "—")
+                        LabeledContent("Địa chỉ") {
+                            Text(app.baseURL).font(.footnote.monospaced()).textSelection(.enabled)
+                        }
+                        if let ok = app.lastOK {
+                            LabeledContent("Kết nối lần cuối", value: ok.formatted(date: .omitted, time: .standard))
+                        }
                     }
                 }
 
@@ -60,6 +64,7 @@ struct SettingsView: View {
                     Text("Bật: phiên Claude Code trên máy (đã cài hook) luôn chờ sau mỗi lượt, mở app là nhắn được, gõ ở máy vẫn bình thường. Rời máy quá 45 giây thì xin quyền hiện trên điện thoại. Tắt: phải gõ /phone trong VS Code trước.")
                 }
 
+                if !app.isHub {
                 Section {
                     TextField("topic bí mật, vd. cc-x7k2p9q4", text: $topic)
                         .textInputAutocapitalization(.never)
@@ -100,6 +105,11 @@ struct SettingsView: View {
                 } footer: {
                     Text("Muốn chặn hẳn thiết bị này, bấm Thu hồi trong dashboard trên máy tính.")
                 }
+
+                Section {
+                    Button("Đăng nhập hub (không cần Tailscale)") { app.setMode("hub"); dismiss() }
+                }
+                }
             }
             .navigationTitle("Cài đặt")
             .navigationBarTitleDisplayMode(.inline)
@@ -138,5 +148,98 @@ struct SettingsView: View {
         } catch {
             message = (error as? APIError)?.message ?? error.localizedDescription
         }
+    }
+}
+
+/// Cài đặt khi kết nối qua hub: tài khoản, máy, thông báo ntfy (topic do hub cấp), thiết bị, đăng xuất.
+struct HubSettingsSection: View {
+    @Environment(AppModel.self) private var app
+    @Environment(\.dismiss) private var dismiss
+    @State private var devices: [HubDevice] = []
+    @State private var message: String?
+    @State private var confirmLogout = false
+    @State private var confirmAll = false
+    @State private var sendOriginal = ImagePrep.sendOriginal
+
+    var body: some View {
+        Section {
+            LabeledContent("Tài khoản", value: app.hub?.username ?? "—")
+            LabeledContent("Hub") { Text(app.hubURL).font(.footnote.monospaced()).textSelection(.enabled) }
+            LabeledContent("Máy tính", value: app.currentMachine?.name ?? "—")
+            LabeledContent("Kết nối", value: app.hub?.connected == true ? "Đang kết nối" : (app.hub?.lastError ?? "Đang nối lại…"))
+        } header: {
+            Text("Hub")
+        }
+
+        Section {
+            Toggle("Gửi ảnh gốc (không thu nhỏ)", isOn: Binding(get: { sendOriginal }, set: { sendOriginal = $0; ImagePrep.sendOriginal = $0 }))
+        } footer: {
+            Text("Mặc định ảnh được thu nhỏ còn cạnh dài 2000 px trước khi gửi (Claude cũng tự thu nhỏ ảnh quá cỡ). Bật khi cần soi chi tiết nhỏ.")
+        }
+
+        Section {
+            if let s = app.hub?.ntfySubscribe, let url = URL(string: s) {
+                Link("Bật thông báo khi app đóng (mở app ntfy)", destination: url)
+            }
+            Link("Tải app ntfy", destination: URL(string: "https://docs.ntfy.sh/subscribe/phone/")!)
+        } header: {
+            Text("Thông báo khi app đóng")
+        } footer: {
+            Text("Hub tự cấp topic riêng cho tài khoản của bạn: bấm một lần để đăng ký trong app ntfy. Chỉ báo khi app không mở.")
+        }
+
+        Section {
+            ForEach(devices) { d in
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text(d.name + (d.current == true ? " (máy này)" : ""))
+                        if let t = d.lastSeen {
+                            Text("dùng lần cuối " + Date(timeIntervalSince1970: t / 1000).formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    if d.current != true {
+                        Button("Thu hồi", role: .destructive) { Task { await revoke(d.id) } }.font(.footnote)
+                    }
+                }
+            }
+            if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
+        } header: {
+            Text("Thiết bị đã đăng nhập")
+        }
+        .task { await loadDevices() }
+
+        Section {
+            Button("Đăng xuất", role: .destructive) { confirmLogout = true }
+            Button("Đăng xuất mọi nơi", role: .destructive) { confirmAll = true }
+            Button("Dùng Tailscale (cách cũ)") { app.setMode("tailscale"); dismiss() }
+        } footer: {
+            Text("Đăng nhập dùng mãi — app không tự đăng xuất. Mất máy thì thu hồi thiết bị đó ở đây từ máy khác.")
+        }
+        .confirmationDialog("Đăng xuất khỏi hub?", isPresented: $confirmLogout, titleVisibility: .visible) {
+            Button("Đăng xuất", role: .destructive) { app.logout(); dismiss() }
+        }
+        .confirmationDialog("Đăng xuất trên mọi thiết bị?", isPresented: $confirmAll, titleVisibility: .visible) {
+            Button("Đăng xuất mọi nơi", role: .destructive) {
+                Task {
+                    let _: Ignored? = try? await app.hubCall("logoutAll")
+                    app.logout(remote: false)
+                    dismiss()
+                }
+            }
+        }
+    }
+
+    private func loadDevices() async {
+        do { devices = try await app.hubCall("devices") } catch { message = (error as? APIError)?.message ?? error.localizedDescription }
+    }
+
+    private func revoke(_ id: String) async {
+        do {
+            let _: Ignored = try await app.hubCall("devices.revoke", ["id": id])
+            await loadDevices()
+            message = "Đã thu hồi"
+        } catch { message = (error as? APIError)?.message ?? error.localizedDescription }
     }
 }

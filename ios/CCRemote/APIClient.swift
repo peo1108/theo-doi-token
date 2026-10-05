@@ -12,9 +12,35 @@ private struct ErrorBody: Decodable {
 }
 
 /// Gọi API của remote.js. Mọi request (trừ ping/pair) mang `Authorization: Bearer <token>`.
+/// Có `hub` (chế độ VPS): cùng các lời gọi đó được chuyển thành hàm của giao thức hub tới máy `machine`.
 struct APIClient {
     let base: String
     let token: String?
+    var hub: HubClient? = nil
+    var machine: String = ""
+
+    /// Đường dẫn HTTP cũ -> (hàm, tham số) của giao thức hub (khớp httpRoute trong remote.js).
+    static func rpc(_ method: String, _ path: String, _ body: [String: Any]?) throws -> (String, [String: Any]) {
+        let comps = URLComponents(string: path)
+        let p = comps?.path ?? path
+        var params = body ?? [:]
+        let fixed: [String: String] = [
+            "GET /v1/state": "state", "GET /v1/projects": "projects", "GET /v1/projects/sessions": "projects.sessions",
+            "GET /v1/capabilities": "capabilities", "POST /v1/sessions": "sessions.create",
+            "POST /v1/accounts/switch": "accounts.switch", "POST /v1/always-on": "alwaysOn",
+        ]
+        if let m = fixed["\(method) \(p)"] {
+            for q in comps?.queryItems ?? [] { params[q.name] = q.value ?? "" }
+            return (m, params)
+        }
+        let seg = p.split(separator: "/").map(String.init)   // ["v1", "sessions", id, action?]
+        if seg.count >= 3, seg[0] == "v1", seg[1] == "sessions", seg[2].count == 36 {
+            params["id"] = seg[2]
+            if seg.count == 3, method == "GET" { return ("sessions.get", params) }
+            if seg.count == 4, method == "POST" { return ("sessions.\(seg[3])", params) }
+        }
+        throw APIError(code: "UNSUPPORTED", message: "Chức năng này chưa có khi kết nối qua hub")
+    }
 
     static let session: URLSession = {
         let c = URLSessionConfiguration.default
@@ -57,6 +83,13 @@ struct APIClient {
     }
 
     func call<T: Decodable>(_ method: String, _ path: String, body: [String: Any]? = nil, as type: T.Type = T.self) async throws -> T {
+        if let hub {
+            let (m, params) = try Self.rpc(method, path, body)
+            let data = try await hub.call(machine: machine, method: m, params: params)
+            do { return try JSONDecoder().decode(T.self, from: data) } catch {
+                throw APIError(code: "DECODE", message: "Dữ liệu từ máy tính không đọc được — cập nhật tracker trên máy tính?")
+            }
+        }
         let req = try makeRequest(method, path, body: body)
         let data: Data
         let resp: URLResponse
@@ -81,7 +114,19 @@ struct APIClient {
 
     /// Đọc SSE của một phiên: mỗi dòng `data: {...}` là một sự kiện JSON hoàn chỉnh.
     func events(session id: String, after: Int, epoch: String) -> AsyncThrowingStream<Data, Error> {
-        AsyncThrowingStream { continuation in
+        if let hub {
+            let machine = self.machine
+            return AsyncThrowingStream { continuation in
+                let task = Task { @MainActor in
+                    do {
+                        for try await d in hub.subscribe(machine: machine, session: id, after: after, epoch: epoch) { continuation.yield(d) }
+                        continuation.finish()
+                    } catch { continuation.finish(throwing: error) }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+        }
+        return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let ep = epoch.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""

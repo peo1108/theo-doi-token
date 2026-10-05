@@ -1,10 +1,16 @@
 import SwiftUI
+import PhotosUI
 
 struct SessionView: View {
     @Environment(AppModel.self) private var app
     @State private var model: SessionModel
     @State private var draft = ""
     @State private var showSettings = false
+    // ảnh đính kèm (chỉ khi kết nối qua hub)
+    @State private var picks: [PickedImage] = []
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showPhotos = false
+    @State private var showCamera = false
     @FocusState private var inputFocused: Bool
 
     init(id: String) {
@@ -80,6 +86,22 @@ struct SessionView: View {
             if let d = UserDefaults.standard.string(forKey: "draft"), draft.isEmpty { draft = d }
         }
         .sheet(isPresented: $showSettings) { SessionSettingsView(model: model) }
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: max(1, ImagePrep.maxCount - picks.count), matching: .images)
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            Task { @MainActor in
+                for item in items {
+                    if let d = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: d), picks.count < ImagePrep.maxCount {
+                        picks.append(PickedImage(image: img))
+                    }
+                }
+            }
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { img in if picks.count < ImagePrep.maxCount { picks.append(PickedImage(image: img)) } }
+                .ignoresSafeArea()
+        }
     }
 
     private var subtitle: String {
@@ -160,7 +182,27 @@ struct SessionView: View {
                 }
                 Divider()
             }
+            if !picks.isEmpty { AttachmentStrip(picks: $picks).background(.bar) }
             composerRow
+        }
+    }
+
+    /// Nút 📎: thư viện ảnh, chụp ảnh, dán ảnh (chỉ khi kết nối qua hub — đường Tailscale cũ giới hạn 256 KB).
+    @ViewBuilder private var attachButton: some View {
+        if app.isHub {
+            Menu {
+                Button { showPhotos = true } label: { Label("Thư viện ảnh", systemImage: "photo.on.rectangle") }
+                Button { showCamera = true } label: { Label("Chụp ảnh", systemImage: "camera") }
+                if UIPasteboard.general.hasImages {
+                    Button {
+                        for img in UIPasteboard.general.images ?? [] where picks.count < ImagePrep.maxCount { picks.append(PickedImage(image: img)) }
+                    } label: { Label("Dán ảnh", systemImage: "doc.on.clipboard") }
+                }
+            } label: {
+                Image(systemName: "paperclip.circle").font(.system(size: 28))
+            }
+            .tint(.secondary)
+            .disabled(picks.count >= ImagePrep.maxCount)
         }
     }
 
@@ -173,6 +215,7 @@ struct SessionView: View {
                 Image(systemName: "slash.circle").font(.system(size: 28))
             }
             .tint(.secondary)
+            attachButton
             TextField("Nhắn cho Claude…  (/ để xem lệnh)", text: $draft, axis: .vertical)
                 .lineLimit(1...6)
                 .focused($inputFocused)
@@ -188,15 +231,21 @@ struct SessionView: View {
             }
             Button {
                 let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { return }
+                guard !text.isEmpty || !picks.isEmpty else { return }
+                let sending = picks
                 draft = ""
+                picks = []
                 act { api in
-                    if !(await model.send(text, api: api)) && draft.isEmpty { draft = text }
+                    let images = sending.enumerated().compactMap { ImagePrep.payload($0.element.image, index: $0.offset) }
+                    if !(await model.send(text, images: images, api: api)) {
+                        if draft.isEmpty { draft = text }
+                        if picks.isEmpty { picks = sending }
+                    }
                 }
             } label: {
                 Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
             }
-            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.sending)
+            .disabled((draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && picks.isEmpty) || model.sending)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(.bar)
@@ -223,13 +272,18 @@ struct EventRow: View {
                 if event.via == "phone" {
                     Label("từ điện thoại", systemImage: "iphone").font(.caption2).foregroundStyle(.secondary)
                 }
-                Text(event.text ?? "")
-                    .font(.callout)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12).padding(.vertical, 9)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+                if let imgs = event.images, !imgs.isEmpty {
+                    EventImages(images: imgs, sessionId: model.id)
+                }
+                if let t = event.text, !t.isEmpty {
+                    Text(t)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12).padding(.vertical, 9)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+                }
             }
             .padding(.top, 8)
         case "assistant":
