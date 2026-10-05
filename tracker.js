@@ -59,9 +59,20 @@ function writeJSON(file, data) {
 const loadConfig = () => ({ ...DEFAULT_CONFIG, ...readJSON(CONFIG_FILE, {}) });
 const loadPricing = () => A.pricing(readJSON(MODELS_FILE, { models: [] }));
 
-function loadStore() {
+// initId = tài khoản đầu tiên của dòng thời gian (mục 'init'); dùng khi nâng store v4 -> v5.
+function loadStore(initId = '') {
   const s = readJSON(STORE_FILE, null);
   if (s && s.v === STORE_VERSION && s.msgs && s.files && s.daily) return s;
+  if (s && s.v === 4 && s.daily && typeof s.daily === 'object') {
+    // v4 chưa có tài khoản trong khoá: log của ngày cũ đã bị Claude Code xoá nên không dựng lại được,
+    // gán các ngày đã chốt cho tài khoản 'init' (mục 5.4 của spec); chi tiết 7 ngày và backfill được dựng lại.
+    const daily = {};
+    for (const [day, keys] of Object.entries(s.daily)) {
+      daily[day] = {};
+      for (const [k, v] of Object.entries(keys || {})) daily[day][`${initId}|${k}`] = v;
+    }
+    return { v: STORE_VERSION, files: {}, msgs: {}, daily, backfilledAt: 0, lastScan: 0 };
+  }
   return { v: STORE_VERSION, files: {}, msgs: {}, daily: {}, backfilledAt: 0, lastScan: 0 };
 }
 
@@ -205,7 +216,7 @@ function scan() {
   const cutoff = now - KEEP_MS;
   try { accounts.sync(now); } catch (err) { console.error('accounts.sync:', err.message); }   // lỗi tài khoản không chặn quét log
   const entries = accountEntries();
-  const store = loadStore();
+  const store = loadStore(entries[0]?.id || '');
   let changed = false;
 
   if (!store.backfilledAt || now - store.lastScan > 6 * DAY) {

@@ -135,6 +135,40 @@ test('không có .credentials.json và không có hồ sơ: vẫn chạy', () =>
   assert.equal(rec.accounts.fileAccount, null);
 });
 
+test('nâng cấp store v4 -> v5: ngày đã chốt cũ hơn mọi log được giữ dưới khoá init|model, ngày gần đây dựng lại từ log', () => {
+  reset();
+  const t0 = writeTurns();
+  seed({ loginAs: 2, switchAt: t0 + 2 * HOUR });
+  const DAY = 24 * HOUR;
+  const oldKey = A.dayKey(Date.now() - 60 * DAY);       // cũ hơn mọi file log còn lại -> chỉ còn trong store
+  const midKey = A.dayKey(Date.now() - 20 * DAY);       // có trong store lẫn log: không được ghi đè
+  const staleKey = A.dayKey(Date.now() - 3 * DAY);      // trong 7 ngày chi tiết: bỏ và dựng lại
+  const oldVal = { i: 111, o: 222, w5: 333, w1: 4, cr: 5555, th: 6, n: 7 };
+  fs.writeFileSync(path.join(env.dataDir, 'usage.json'), JSON.stringify({
+    v: 4, files: { x: { mtime: 1, size: 1 } }, msgs: { m: { t: 1 } }, backfilledAt: Date.now(), lastScan: Date.now(),
+    daily: {
+      [oldKey]: { 'claude-old': oldVal, 'claude-old|fast': { ...oldVal, n: 1 } },
+      [midKey]: { 'claude-fable-5-1': { ...oldVal, n: 9 } },
+      [staleKey]: { 'claude-fable-5-1': { ...oldVal, n: 99 } },
+    },
+  }));
+  // log 20 ngày trước (cùng ngày midKey) có 1 lượt khác hẳn
+  const tMid = Date.now() - 20 * DAY;
+  fs.writeFileSync(path.join(PROJECTS, 'demo', 'mid.jsonl'), JSON.stringify({
+    type: 'assistant', timestamp: new Date(tMid).toISOString(), sessionId: 's2', cwd: 'C:\\proj\\demo',
+    message: { id: 'mid-1', model: 'claude-fable-5-1', usage: { input_tokens: 5, output_tokens: 5 } },
+  }) + '\n');
+
+  const rec = T.records();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(env.dataDir, 'usage.json'), 'utf8')).v, 5);
+  assert.deepEqual(rec.daily[oldKey], { 'acc-1|claude-old': oldVal, 'acc-1|claude-old|fast': { ...oldVal, n: 1 } });
+  assert.deepEqual(rec.daily[midKey], { 'acc-1|claude-fable-5-1': { ...oldVal, n: 9 } });
+  assert.equal(rec.daily[staleKey], undefined);
+  const today = rec.daily[A.dayKey(t0)];
+  assert.ok(Object.keys(today).some((k) => k.startsWith('acc-1|')) && Object.keys(today).some((k) => k.startsWith('acc-2|')), Object.keys(today).join());
+  assert.ok(Object.keys(rec.daily).every((d) => Object.keys(rec.daily[d]).every((k) => /^acc-\d\|/.test(k))));
+});
+
 // ---- server ----
 
 async function withServer(fn) {
