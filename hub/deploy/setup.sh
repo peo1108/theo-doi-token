@@ -72,7 +72,8 @@ printf 'SHELL=/bin/sh\n30 3 * * * cchub /usr/local/bin/cc-hub-backup %s %s\n' "$
 
 say "SSH"
 if [ -s /root/.ssh/authorized_keys ]; then
-  printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n' > /etc/ssh/sshd_config.d/99-cc-hub.conf
+  printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n' > /etc/ssh/sshd_config.d/00-cc-hub.conf
+  rm -f /etc/ssh/sshd_config.d/99-cc-hub.conf   # bản cũ: thua 50-cloud-init.conf (sshd lấy giá trị gặp trước)
   (systemctl reload ssh || systemctl reload sshd) && echo "Đã tắt đăng nhập SSH bằng mật khẩu (dùng khoá)."
 else
   echo "!! Root chưa có khoá SSH (/root/.ssh/authorized_keys) — GIỮ đăng nhập mật khẩu. Thêm khoá rồi chạy lại script để tắt."

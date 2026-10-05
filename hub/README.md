@@ -46,6 +46,6 @@ cd /opt/theo-doi-token && git pull && sudo bash hub/deploy/update.sh
 
 ## Vận hành
 
-- Log: `journalctl -u cc-hub -f` · Caddy: `/var/log/caddy/cc-hub.log`
+- Log: `journalctl -u cc-hub -f` · Caddy: `journalctl -u caddy -f`
 - Sao lưu DB: `/var/backups/cc-hub/hub-YYYY-MM-DD.db` (03:30 mỗi đêm, giữ 7 bản)
 - Kiểm tra: `curl https://<tên miền>/v1/health` → `{"ok":true,"proto":1}`
