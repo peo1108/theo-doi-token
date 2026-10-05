@@ -474,3 +474,16 @@ test('/api/summary: cửa sổ 5h theo mốc reset thật của tài khoản đa
     assert.equal(s.window.real, true);
   });
 });
+
+test('refreshUsage: tài khoản đang trong file hỏi lại sau ~1 phút, tài khoản khác 5 phút', async () => {
+  reset();
+  seed({ loginAs: 2 });
+  const t = Date.now();
+  await T.refreshUsage(t, okFetch({ 'at-1': util(10, 10), 'at-2': util(20, 20) }));
+  const calls = [];
+  await T.refreshUsage(t + 61e3, okFetch({ 'at-1': util(11, 11), 'at-2': util(21, 21) }, calls));
+  assert.deepEqual(calls, ['at-2']);
+  const calls2 = [];
+  await T.refreshUsage(t + 5 * 60e3 + 1e3, okFetch({ 'at-1': util(12, 12), 'at-2': util(22, 22) }, calls2));
+  assert.deepEqual(calls2.sort(), ['at-1', 'at-2']);
+});

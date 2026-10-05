@@ -192,7 +192,9 @@ function windowSummary(rows, now, active) {
 // Cache cachedUsageUtilization của Claude Code chỉ thỉnh thoảng mới cập nhật, nên tracker tự hỏi
 // endpoint mà /usage của Claude Code dùng, bằng access token của từng hồ sơ (chỉ đọc, không làm mới token).
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
-const USAGE_EVERY_MS = 5 * MIN;
+const USAGE_EVERY_MS = 5 * MIN;   // tài khoản không nằm trong file đăng nhập
+const USAGE_ACTIVE_MS = MIN;      // tài khoản đang dùng: gần như theo thời gian thực
+const USAGE_TICK_MS = 20e3;
 const STALE_MS = 10 * MIN;
 
 async function refreshUsage(now = Date.now(), fetchImpl = globalThis.fetch) {
@@ -204,7 +206,8 @@ async function refreshUsage(now = Date.now(), fetchImpl = globalThis.fetch) {
     // tài khoản đang nằm trong file: Claude Code giữ token mới nhất ở đó
     const oauth = p.id === fileId && fileOauth ? fileOauth : p.oauth;
     if (!oauth || !oauth.accessToken || !(oauth.expiresAt > now + MIN)) continue;
-    if (p.usage && p.usage.fetchedAtMs > now - USAGE_EVERY_MS + 5e3) continue;
+    const every = p.id === fileId ? USAGE_ACTIVE_MS : USAGE_EVERY_MS;
+    if (p.usage && p.usage.fetchedAtMs > now - every + 5e3) continue;
     try {
       const res = await fetchImpl(USAGE_URL, {
         headers: { Authorization: `Bearer ${oauth.accessToken}`, 'anthropic-beta': 'oauth-2025-04-20' },
@@ -711,11 +714,13 @@ function serve() {
 
   server.listen(PORT, HOST, () => {
     console.log(`Dashboard: http://127.0.0.1:${PORT}  ·  Prometheus: /metrics  (Ctrl+C để dừng)`);
-    const tick = () => { try { checkAlerts(); } catch (err) { console.error('checkAlerts:', err.message); }
-      refreshUsage().catch((err) => console.error('usage:', err.message));   // tự giới hạn 5 phút/tài khoản
-    };
+    const tick = () => { try { checkAlerts(); } catch (err) { console.error('checkAlerts:', err.message); } };
     tick();
     setInterval(tick, ALERT_EVERY_MS);
+    // hạn mức: tự giới hạn 1 phút (tài khoản đang dùng) / 5 phút (tài khoản khác)
+    const usageTick = () => refreshUsage().catch((err) => console.error('usage:', err.message));
+    usageTick();
+    setInterval(usageTick, USAGE_TICK_MS);
   });
 }
 

@@ -166,7 +166,7 @@ $tray.add_MouseUp({
   }
 })
 $timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 30000
+$timer.Interval = 15000
 $timer.add_Tick({ try { Update-Status } catch { } })
 $timer.Start()
 
