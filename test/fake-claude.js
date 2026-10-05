@@ -51,10 +51,14 @@ function onUser(text) {
   } else if (text.includes('LIMIT')) {
     out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1900000000, rateLimitType: 'five_hour', unifiedWindows: { five_hour: { utilization: 1, resetsAt: 1900000000 }, seven_day: { utilization: 0.5 } } } });
     result({ is_error: true, subtype: 'error', result: 'Claude AI usage limit reached' });
+  } else if (text.includes('PONDER')) {
+    // đang nghĩ mãi (để chụp màn hình dòng Thinking… · N tokens)
+    for (const n of [80, 230]) out({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: n });
   } else if (text.includes('SLOW')) {
     say('working...');
     slow = () => { out({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] }, parent_tool_use_id: null }); result({ is_error: true, subtype: 'error_during_execution', terminal_reason: 'aborted_streaming' }); };
   } else {
+    if (text.includes('THINK')) for (const n of [50, 120]) out({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: n });
     say(`echo: ${text}`);
     result();
   }

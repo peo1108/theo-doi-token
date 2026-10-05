@@ -22,6 +22,17 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle("Luôn sẵn sàng nhận lệnh", isOn: Binding(
+                        get: { app.state?.alwaysOn ?? true },
+                        set: { v in Task { try? await app.setAlwaysOn(v) } }
+                    ))
+                } header: {
+                    Text("Phiên VS Code / terminal")
+                } footer: {
+                    Text("Bật: phiên Claude Code trên máy (đã cài hook) luôn chờ sau mỗi lượt, mở app là nhắn được, gõ ở máy vẫn bình thường. Rời máy quá 45 giây thì xin quyền hiện trên điện thoại. Tắt: phải gõ /phone trong VS Code trước.")
+                }
+
+                Section {
                     TextField("topic bí mật, vd. cc-x7k2p9q4", text: $topic)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()

@@ -7,8 +7,8 @@
   phiên. Ghép bằng mã 6 số, thông báo khi app đóng qua ntfy (tuỳ chọn). Thẻ Điện thoại trên dashboard.
 - Cài đặt phiên trên điện thoại: model, Effort, Thinking, Fast mode, đổi model khi bị flag, output style (áp dụng ngay
   giữa phiên, giữ khi mở lại); gợi ý lệnh `/` khi gõ.
-- Điều khiển **phiên đang mở trong VS Code / terminal** qua hook: gõ `/phone` trong VS Code, rồi nhắn và duyệt quyền
-  từ điện thoại ngay trong phiên đó; gõ ở máy là tự thả về.
+- Điều khiển **phiên đang mở trong VS Code / terminal** qua hook, luôn sẵn sàng (không cần `/phone`): nhắn lúc rảnh hay
+  đang chạy, bấm dừng giữa chừng, xin quyền chuyển sang điện thoại khi m rời máy; dòng Thinking… · N tokens như IDE.
 - App: phiên xếp theo dự án (phiên đang chạy luôn ở trên), tạo phiên mới trong dự án; khung trả lời giống VS Code.
 - IPA chưa ký được build tự động bằng GitHub Actions (release `ios-latest`), cài bằng ESign.
 

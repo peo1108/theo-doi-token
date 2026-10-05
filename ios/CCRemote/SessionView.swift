@@ -26,12 +26,13 @@ struct SessionView: View {
                             .id(ev.seq)
                     }
                     if model.status == "running" || model.status == "starting" {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text(model.status == "starting" ? "Đang mở Claude…" : "Claude đang làm…")
-                                .font(.footnote).foregroundStyle(.secondary)
+                        // như VS Code: "Thinking… · N tokens" rồi dòng chữ chạy "Vibing…"
+                        if let tk = model.thinkingTokens {
+                            TimelineRow(color: Color.secondary.opacity(0.55)) {
+                                Text("Thinking… · \(tk) tokens").font(.callout).foregroundStyle(.secondary)
+                            }
                         }
-                        .padding(.leading, 4)
+                        SpinnerLine(verb: model.status == "starting" ? "Đang mở Claude" : model.spinnerVerb)
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -109,26 +110,33 @@ struct SessionView: View {
         if let s = model.summary, s.external == true {
             let src = s.source ?? "Máy tính"
             let attached = s.attached == true
+            let ready = s.ready == true
+            let running = s.status == "running" || s.status == "waiting"
             HStack(spacing: 10) {
                 Image(systemName: src == "Terminal" ? "terminal" : "laptopcomputer")
-                    .foregroundStyle(attached ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(ready || running ? Color.green : Color.secondary)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(!attached ? "\(src) · đang mở trên máy tính"
-                         : s.ready == true ? "\(src) · đang chờ lệnh từ điện thoại"
-                         : s.status == "running" ? "\(src) · Claude đang làm…" : "\(src) · đã gắn điện thoại")
+                    Text(ready ? "\(src) · sẵn sàng nhận lệnh"
+                         : running ? "\(src) · Claude đang làm…"
+                         : "\(src) · chưa sẵn sàng")
                         .font(.footnote.weight(.semibold))
-                    Text(!attached ? "Bấm Điều khiển rồi gõ /phone trong VS Code (hoặc chờ Claude xong lượt đang làm)"
-                         : s.ready == true ? "Gửi tin là Claude trên máy làm tiếp ngay"
-                         : "Tin gửi lúc này sẽ vào khi Claude xong lượt")
+                    Text(ready ? "Nhắn là Claude trên máy làm tiếp ngay"
+                         : running ? "Tin gửi lúc này sẽ vào ngay khi Claude xong lượt"
+                         : "Hook đã bị dừng (bấm Stop trong VS Code?) — gõ một tin bất kỳ trong VS Code để bật lại")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                    Text(attached ? "Duyệt quyền: trên điện thoại" : s.pcAway == true ? "Duyệt quyền: trên điện thoại (máy đang để yên)" : "Duyệt quyền: trên máy tính (đang có người dùng máy)")
+                        .font(.caption2)
+                        .foregroundStyle(attached || s.pcAway == true ? Color.accentColor : Color.secondary)
                 }
                 Spacer(minLength: 4)
-                Button(attached ? "Thả về máy" : "Điều khiển") {
-                    act { await model.attach(!attached, api: $0) }
+                Menu {
+                    Button(attached ? "Trả duyệt quyền về máy tính" : "Luôn duyệt quyền trên điện thoại") {
+                        act { await model.attach(!attached, api: $0) }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle").font(.title3)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
             }
             .padding(.horizontal, 14).padding(.vertical, 8)
             .background(.bar)
@@ -247,6 +255,10 @@ struct EventRow: View {
         case "output":
             TimelineRow(color: Color.secondary.opacity(0.55)) {
                 InOutBlock(input: nil, output: event.text, outputError: event.error == true, outputLines: nil)
+            }
+        case "thought":
+            TimelineRow(color: Color.secondary.opacity(0.55)) {
+                Text("Thought for \(Int(event.seconds ?? 1))s").font(.callout).foregroundStyle(.secondary)
             }
         case "note":
             Text(event.text ?? "")

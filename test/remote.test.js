@@ -300,6 +300,7 @@ function runHook(event, input) {
 }
 
 test('điều khiển phiên VS Code: /phone, chờ lệnh, gửi tin, xin quyền, gõ ở máy thì thả', async () => {
+  R.setAlwaysOn(false);   // chế độ cũ: phải gõ /phone
   const id = '22222222-3333-4444-5555-666666666666';
   const dir = path.join(PROJECTS, 'vscode');
   fs.mkdirSync(dir, { recursive: true });
@@ -321,7 +322,7 @@ test('điều khiển phiên VS Code: /phone, chờ lệnh, gửi tin, xin quy�
   // gõ /phone trong VS Code -> gắn; Claude trả lời xong -> hook Stop đứng chờ
   await runHook('prompt', { ...base, prompt: '/phone' });
   const parked = runHook('stop', { ...base, last_assistant_message: 'Đã chuyển sang điện thoại' });
-  await until(() => hub.get(id, { load: false }).bridge.parked);
+  await until(() => hub.get(id, { load: false })?.bridge?.parked);
   st = (await api('GET', `/v1/sessions/${id}`)).body;
   assert.equal(st.attached, true);
   assert.equal(st.ready, true);
@@ -359,7 +360,7 @@ test('điều khiển phiên VS Code: /phone, chờ lệnh, gửi tin, xin quy�
 
   // gõ ở máy -> thả: hook Stop đang chờ thì cho qua, xin quyền thì để VS Code hỏi
   const parked2 = runHook('stop', base);
-  await until(() => hub.get(id, { load: false }).bridge.parked);
+  await until(() => hub.get(id, { load: false })?.bridge?.parked);
   await runHook('prompt', { ...base, prompt: 'tôi về máy rồi' });
   r = await parked2;
   assert.equal(r.out, '');
@@ -370,7 +371,7 @@ test('điều khiển phiên VS Code: /phone, chờ lệnh, gửi tin, xin quy�
   // gắn từ điện thoại, rồi thả bằng nút trên điện thoại
   await api('POST', `/v1/sessions/${id}/attach`, { on: true });
   const parked3 = runHook('stop', base);
-  await until(() => hub.get(id, { load: false }).bridge.parked);
+  await until(() => hub.get(id, { load: false })?.bridge?.parked);
   await api('POST', `/v1/sessions/${id}/attach`, { on: false });
   assert.equal((await parked3).out, '');
 });
@@ -402,4 +403,128 @@ test('cài / gỡ hook: giữ hook khác của người dùng, có lệnh /phone
   s = JSON.parse(fs.readFileSync(settings, 'utf8'));
   assert.deepEqual(s.hooks, { Stop: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] });
   assert.ok(!fs.existsSync(path.join(env.dir, 'commands', 'phone.md')));
+});
+
+test('luôn sẵn sàng: không cần /phone, gõ ở máy thì nhả hook, rời máy thì hỏi quyền trên điện thoại', async () => {
+  R.setAlwaysOn(true);
+  hub.setIdle(500);   // đang ngồi ở máy
+  const id = '55555555-6666-7777-8888-999999999999';
+  const dir = path.join(PROJECTS, 'vscode2');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${id}.jsonl`);
+  const line = (o) => fs.appendFileSync(file, JSON.stringify({ cwd: WORK, sessionId: id, timestamp: new Date().toISOString(), ...o }) + '\n');
+  line({ type: 'user', message: { role: 'user', content: 'đang làm trên máy' } });
+  const base = { session_id: id, transcript_path: file, cwd: WORK };
+
+  // xong lượt -> hook Stop đứng chờ dù chưa ai gõ /phone
+  let parked = runHook('stop', base);
+  await until(() => hub.get(id, { load: false })?.bridge?.parked);
+  let st = (await api('GET', `/v1/sessions/${id}`)).body;
+  assert.equal(st.ready, true);
+  assert.equal(st.attached, false);
+
+  // người dùng gõ tiếp trong VS Code -> Claude Code ghi enqueue -> hook nhả, không gửi gì
+  line({ type: 'queue-operation', operation: 'enqueue' });
+  let r = await parked;
+  assert.equal(r.out, '');
+  assert.equal(hub.get(id, { load: false })?.bridge?.parked, null);
+
+  // đang ở máy: xin quyền để VS Code hỏi
+  r = await runHook('permission', { ...base, tool_name: 'Bash', tool_input: { command: 'ls' } });
+  assert.equal(r.out, '');
+
+  // điện thoại nhắn lúc phiên đang chờ -> đưa vào ngay
+  parked = runHook('stop', base);
+  await until(() => hub.get(id, { load: false })?.bridge?.parked);
+  await api('POST', `/v1/sessions/${id}/send`, { text: 'nhắn từ điện thoại' });
+  r = await parked;
+  assert.ok(JSON.parse(r.out).reason.endsWith('nhắn từ điện thoại'));
+
+  // điện thoại đã nhắn -> đang điều khiển -> xin quyền hỏi trên điện thoại kể cả khi ngồi ở máy
+  let perm = runHook('permission', { ...base, tool_name: 'Write', tool_input: { file_path: 'a.txt' } });
+  let pe = (await watch(id, has('permission', (e) => e.tool === 'Write'))).filter((e) => e.kind === 'permission').pop();
+  await api('POST', `/v1/sessions/${id}/permission`, { requestId: pe.requestId, decision: 'allow' });
+  assert.equal(JSON.parse((await perm).out).hookSpecificOutput.decision.behavior, 'allow');
+
+  // thả về máy trên điện thoại: hook Stop vẫn chờ (luôn sẵn sàng)
+  parked = runHook('stop', base);
+  await until(() => hub.get(id, { load: false })?.bridge?.parked);
+  await api('POST', `/v1/sessions/${id}/attach`, { on: false });
+  assert.ok(hub.get(id, { load: false })?.bridge?.parked, 'vẫn chờ');
+
+  // rời máy (không thao tác > 45 giây) -> xin quyền hỏi trên điện thoại; quay lại máy -> trả về VS Code
+  hub.setIdle(60e3);
+  assert.equal((await api('GET', '/v1/state')).body.pcAway, true);
+  perm = runHook('permission', { ...base, tool_name: 'Edit', tool_input: { file_path: 'b.txt' } });
+  pe = (await watch(id, has('permission', (e) => e.tool === 'Edit'))).filter((e) => e.kind === 'permission').pop();
+  assert.ok(pe);
+  hub.setIdle(800);
+  assert.equal((await perm).out, '', 'quay lại máy -> hook không quyết định, VS Code hỏi');
+
+  // tắt luôn sẵn sàng: hook Stop đang chờ không bị ép thả, lần sau thì cho qua
+  hub.get(id, { load: false }).release({ action: 'continue' });
+  await parked;
+  assert.equal((await api('POST', '/v1/always-on', { on: false })).body.alwaysOn, false);
+  r = await runHook('stop', base);
+  assert.equal(r.out, '');
+  R.setAlwaysOn(true);
+});
+
+test('suy nghĩ: phát Thinking… · N tokens tức thời, xong thì để lại Thought for Xs', async () => {
+  const { body } = await api('POST', '/v1/sessions', { cwd: WORK, text: 'mở phiên' });
+  await watch(body.id, has('result'));
+  const epoch = (await api('GET', `/v1/sessions/${body.id}`)).body.epoch;
+  const seen = watch(body.id, (e) => e.some((x) => x.kind === 'thought'), { after: 1e9, epoch });
+  await new Promise((r) => setTimeout(r, 100));
+  await api('POST', `/v1/sessions/${body.id}/send`, { text: 'THINK đi' });
+  const evs = await seen;
+  const prog = evs.filter((e) => e.kind === 'progress' && e.phase === 'thinking');
+  assert.deepEqual(prog.map((e) => e.tokens), [50, 120]);
+  assert.ok(prog.every((e) => e.seq === undefined), 'không lưu, không phát lại');
+  const th = evs.find((e) => e.kind === 'thought');
+  assert.equal(th.tokens, 120);
+  assert.ok(th.seconds >= 1);
+  assert.ok(evs.some((e) => e.kind === 'progress' && e.phase === 'working'));
+});
+
+test('như điều khiển từ xa: bấm dừng lúc đang chạy -> dừng ở tool kế tiếp; gửi lúc đang chạy -> chèn sau tool', async () => {
+  R.setAlwaysOn(true);
+  hub.setIdle(500);
+  const id = '66666666-7777-8888-9999-aaaaaaaaaaaa';
+  const dir = path.join(PROJECTS, 'vscode3');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${id}.jsonl`);
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', cwd: WORK, sessionId: id, timestamp: new Date().toISOString(), message: { content: 'việc dài' } }) + '\n');
+  const base = { session_id: id, transcript_path: file, cwd: WORK };
+
+  // Claude đang chạy tool -> chưa có gì thì hook cho qua
+  let r = await runHook('tool', { ...base, tool_name: 'Bash' });
+  assert.equal(r.out, '');
+
+  // điện thoại gửi lúc đang chạy -> tool kế tiếp xong thì chèn (decision block, có câu dẫn)
+  await api('POST', `/v1/sessions/${id}/send`, { text: 'nhân tiện sửa luôn README' });
+  r = await runHook('pretool', { ...base, tool_name: 'Read' });
+  assert.equal(r.out, '', 'PreToolUse không chèn tin (chỉ dừng)');
+  r = await runHook('tool', { ...base, tool_name: 'Read' });
+  const o = JSON.parse(r.out);
+  assert.equal(o.decision, 'block');
+  assert.ok(o.reason.endsWith('nhân tiện sửa luôn README'));
+
+  // bấm dừng lúc đang chạy -> tool kế tiếp (trước hoặc sau) trả continue:false
+  await api('POST', `/v1/sessions/${id}/interrupt`);
+  r = await runHook('pretool', { ...base, tool_name: 'Bash' });
+  assert.equal(JSON.parse(r.out).continue, false);
+  r = await runHook('tool', { ...base, tool_name: 'Bash' });
+  assert.equal(r.out, '', 'chỉ dừng một lần');
+});
+
+test('hook bỏ qua claude -p / SDK (không được đứng chờ)', async () => {
+  const p = spawnProc(process.execPath, [path.join(__dirname, '..', 'hook.js'), 'stop'], {
+    env: { ...process.env, REMOTE_PORT: String(server.address().port), CLAUDE_CODE_ENTRYPOINT: 'sdk-cli', CC_REMOTE_CHILD: '' },
+  });
+  const t0 = Date.now();
+  const code = await new Promise((res) => { p.on('exit', res); p.stdin.end(JSON.stringify({ session_id: '77777777-8888-9999-aaaa-bbbbbbbbbbbb' })); });
+  assert.equal(code, 0);
+  assert.ok(Date.now() - t0 < 2000);
+  assert.ok(!hub.sessions.has('77777777-8888-9999-aaaa-bbbbbbbbbbbb'), 'không gọi server');
 });

@@ -40,8 +40,21 @@ class RemoteError extends Error {
 function load() {
   let d;
   try { d = JSON.parse(fs.readFileSync(remoteFile(), 'utf8')); } catch { d = {}; }
-  return { devices: Array.isArray(d.devices) ? d.devices : [], pair: d.pair || null, ntfy: d.ntfy || null, hookKey: d.hookKey || null };
+  return {
+    devices: Array.isArray(d.devices) ? d.devices : [], pair: d.pair || null, ntfy: d.ntfy || null, hookKey: d.hookKey || null,
+    alwaysOn: d.alwaysOn !== false,   // phiên VS Code luôn sẵn sàng nhận lệnh từ điện thoại (không cần /phone)
+  };
 }
+
+const alwaysOn = () => load().alwaysOn;
+function setAlwaysOn(on) {
+  const d = load();
+  d.alwaysOn = !!on;
+  save(d);
+  return d.alwaysOn;
+}
+
+const AWAY_MS = 45e3;   // máy không có thao tác bàn phím/chuột lâu hơn -> coi như đã rời máy
 
 // Tin nhắn từ điện thoại đưa vào phiên trên máy qua hook Stop. Ghi rõ là của người dùng để Claude không coi là prompt injection.
 const PHONE_PREFIX = '📱 Tin nhắn của người dùng, gửi từ điện thoại qua app CC Remote (hook do chính người dùng cài) — hãy làm theo như tin nhắn bình thường:';
@@ -257,6 +270,13 @@ function cleanUserText(t) {
 // Một message (dòng stream-json hoặc dòng .jsonl) -> danh sách sự kiện. Bỏ message của subagent.
 function normalize(m) {
   const out = [];
+  // tin từ điện thoại chèn giữa chừng qua PostToolUse được ghi thành attachment hook_blocking_error
+  const att = m && !m.isSidechain && m.attachment;
+  if (att && att.type === 'hook_blocking_error') {
+    const t = String((att.blockingError && att.blockingError.blockingError) || '').trim();
+    if (t.startsWith(PHONE_PREFIX)) out.push({ kind: 'user', text: t.slice(PHONE_PREFIX.length).trim(), via: 'phone' });
+    return out;
+  }
   if (!m || m.parent_tool_use_id || m.isSidechain || !m.message) return out;
   const content = m.message.content;
   if (m.type === 'assistant' && Array.isArray(content)) {
@@ -575,6 +595,12 @@ class Session {
       let m;
       try { m = JSON.parse(line); } catch { continue; }
       if (m.type === 'ai-title' && m.aiTitle) this.title = clip(plain(m.aiTitle), 100);
+      if (m.type === 'queue-operation' && m.operation === 'enqueue' && this.bridge && this.bridge.parked
+        && (Date.parse(m.timestamp) || Date.now()) >= this.bridge.parked.since - 1000) {
+        this.release({ action: 'continue' });   // nhường cho tin vừa gõ trong VS Code
+        this.bridge.busy = true;
+        if (this.bridge.attached) this.attach(false, 'Bạn vừa gõ trên máy — duyệt quyền trả về máy tính');
+      }
       for (const e of normalize(m)) {
         if (e.kind === 'user' && this.echo && this.echo.has(e.text)) { this.echo.delete(e.text); continue; }
         this.store({ ...e, t: Date.parse(m.timestamp) || Date.now() });
@@ -647,11 +673,12 @@ class Session {
     return {
       settings: this.effective(), account: this.caps && this.caps.account ? this.caps.account.email : null,
       external: ext, source: ext ? (b.entrypoint === 'claude-vscode' ? 'VS Code' : b.entrypoint === 'cli' ? 'Terminal' : 'Máy tính') : null,
-      attached: ext ? b.attached : false, ready: ext ? !!b.parked : false,
+      attached: ext ? b.attached : false, ready: ext ? !!b.parked : false, pcAway: ext ? this.hub.pcAway() : false,
       id: this.id, cwd: this.cwd, project: this.cwd ? path.basename(this.cwd) : '', title: this.title,
       status: ext ? this.externalStatus() : this.status, live: !!this.proc || ext, pending: this.pending.size, mode: this.mode, model: this.model,
       rate: this.rate, cost: this.cost, lastText: this.lastText, updatedAt: this.updatedAt, epoch: this.epoch,
       lastSeq: this.seq, watching: this.clients.size,
+      thinking: this.thinking ? { tokens: this.thinking.tokens, since: this.thinking.since } : null,
     };
   }
 
@@ -729,7 +756,26 @@ class Session {
     }
   }
 
+  // Sự kiện tức thời (không lưu, không phát lại): tiến độ suy nghĩ cho dòng "Thinking… · N tokens".
+  sendLive(ev) { for (const c of this.clients) c.send(ev); }
+
+  // Hết đoạn suy nghĩ -> để lại dòng "Thought for Xs" như VS Code.
+  endThinking() {
+    if (!this.thinking) return;
+    const t = this.thinking;
+    this.thinking = null;
+    this.sendLive({ kind: 'progress', phase: 'working' });
+    this.store({ kind: 'thought', seconds: Math.max(1, Math.round((Date.now() - t.since) / 1000)), tokens: t.tokens });
+  }
+
   onMessage(m) {
+    if (m.type === 'system' && m.subtype === 'thinking_tokens') {
+      if (!this.thinking) this.thinking = { since: Date.now(), tokens: 0 };
+      this.thinking.tokens = m.estimated_tokens || this.thinking.tokens;
+      this.sendLive({ kind: 'progress', phase: 'thinking', tokens: this.thinking.tokens, since: this.thinking.since });
+      if (this.status !== 'waiting') this.setStatus('running');
+      return;
+    }
     if (m.type === 'system' && m.subtype === 'init') {
       this.known = true;
       if (m.permissionMode && MODES.includes(m.permissionMode)) this.mode = m.permissionMode;
@@ -774,6 +820,7 @@ class Session {
       return;
     }
     if (m.type === 'result') {
+      this.endThinking();
       this.inflight = Math.max(0, this.inflight - 1);
       if (typeof m.total_cost_usd === 'number') this.cost += m.total_cost_usd;
       const ok = !m.is_error;
@@ -789,6 +836,7 @@ class Session {
       return;
     }
     const evs = normalize(m);
+    if (evs.length) this.endThinking();
     if (evs.length && this.status !== 'waiting') this.setStatus('running');
     for (const e of evs) this.store(e);
   }
@@ -872,8 +920,8 @@ class Session {
     } else {
       b.queue.push(text);
       this.store({ kind: 'note', text: b.busy
-        ? 'Đã xếp hàng — gửi khi Claude trên máy xong lượt này'
-        : 'Phiên trên máy đang rảnh nên chưa nhận được: gõ /phone (hoặc một tin bất kỳ) trong VS Code để chuyển sang điện thoại' });
+        ? 'Sẽ chèn vào ngay sau bước Claude đang làm'
+        : 'Phiên trên máy chưa sẵn sàng (hook đã bị dừng hoặc phiên mở trước khi cài): gõ một tin bất kỳ trong VS Code, xong lượt đó tin này sẽ được gửi' });
     }
     this.broadcastState();
   }
@@ -899,8 +947,7 @@ class Session {
     if (on) {
       this.store({ kind: 'note', text: 'Đang điều khiển phiên trên máy từ điện thoại' });
     } else {
-      this.release({ action: 'continue' });
-      b.queue = [];
+      if (!alwaysOn()) { this.release({ action: 'continue' }); b.queue = []; }
       // quyền đang chờ: trả về hộp thoại trên máy
       for (const [id, p] of this.pending) {
         if (!p.hook) continue;
@@ -937,13 +984,19 @@ class Session {
   }
 
   interrupt() {
-    if (this.bridge && !this.proc) {   // phiên trên máy: chỉ dừng được qua lần xin quyền đang chờ
+    if (this.bridge && !this.proc) {   // phiên trên máy: dừng ở lần xin quyền đang chờ, hoặc ngay trước/sau tool kế tiếp
+      let stopped = false;
       for (const [id, p] of [...this.pending]) {
         if (!p.hook) continue;
         this.pending.delete(id);
         clearInterval(p.hook.keepAlive);
         try { p.hook.res.end(JSON.stringify({ decision: { behavior: 'deny', message: 'Người dùng đã ngắt từ điện thoại', interrupt: true } })); } catch {}
         this.store({ kind: 'decided', requestId: id, decision: 'deny' });
+        stopped = true;
+      }
+      if (!stopped && !this.bridge.parked) {
+        this.bridge.stopReq = true;
+        this.store({ kind: 'note', text: 'Đang dừng — Claude sẽ dừng ngay ở bước kế tiếp' });
       }
       return this.broadcastState();
     }
@@ -1076,7 +1129,13 @@ function createHub(ctx = {}) {
       Object.assign(s.bridge, { lastSeen: Date.now(), entrypoint: String(b.entrypoint || s.bridge.entrypoint || '') });
       if (b.transcript_path) s.bridge.transcript = String(b.transcript_path);
       if (!s.cwd && b.cwd) s.cwd = String(b.cwd);
-      if (s.fileOffset == null) s.loadTranscript(true);
+      if (s.fileOffset == null) {
+        if (!s.events.length) s.loadTranscript(true);
+        else {   // đã có sự kiện (vd. tin vừa gửi) -> không nạp lại để khỏi mất, chỉ theo dõi từ cuối file
+          const f = s.transcriptFile();
+          try { if (f) { s.fileOffset = fs.statSync(f).size; s.tailRest = Buffer.alloc(0); } } catch {}
+        }
+      }
       return s;
     },
     // Hook Stop: không gắn điện thoại -> cho qua; có tin xếp hàng -> đưa luôn; không thì giữ kết nối tới khi có tin.
@@ -1084,8 +1143,9 @@ function createHub(ctx = {}) {
       const s = hub.bridgeFor(b);
       const br = s.bridge;
       br.busy = false;
+      br.stopReq = false;   // lượt đã kết thúc: không còn gì để dừng
       s.tail();
-      if (!br.attached) { s.broadcastState(); return res.end(JSON.stringify({ action: 'continue' })); }
+      if (!br.attached && !alwaysOn()) { s.broadcastState(); return res.end(JSON.stringify({ action: 'continue' })); }
       if (br.queue.length) {
         br.busy = true;
         s.broadcastState();
@@ -1093,18 +1153,20 @@ function createHub(ctx = {}) {
       }
       s.release({ action: 'continue' });   // hook cũ còn treo (hiếm) -> thả
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      const w = { res, keepAlive: setInterval(() => { try { res.write(' '); } catch {} }, 20e3) };
+      const w = { res, since: Date.now(), keepAlive: setInterval(() => { try { res.write(' '); } catch {} }, 20e3) };
       br.parked = w;
       req.on('close', () => {
         if (br.parked === w) { br.parked = null; clearInterval(w.keepAlive); s.broadcastState(); }
       });
       s.broadcastState();
-      if (s.clients.size === 0) hub.notify(`Chờ lệnh · ${s.label()}`, clip(b.last || s.lastText, 180), s.id);
+      // báo khi người dùng không ở máy (đang điều khiển từ điện thoại hoặc máy để yên)
+      if (s.clients.size === 0 && (br.attached || hub.pcAway())) hub.notify(`Xong · ${s.label()}`, clip(b.last || s.lastText, 180), s.id);
     },
-    // Hook PermissionRequest: gắn điện thoại -> hỏi trên điện thoại, không thì để VS Code hỏi như thường.
+    // Hook PermissionRequest: điện thoại đang điều khiển hoặc người dùng đã rời máy -> hỏi trên điện thoại;
+    // đang ngồi ở máy -> để VS Code hỏi như thường.
     hookPermission(b, req, res) {
       const s = hub.bridgeFor(b);
-      if (!s.bridge.attached) return res.end(JSON.stringify({ decision: null }));
+      if (!s.bridge.attached && !hub.pcAway()) return res.end(JSON.stringify({ decision: null }));
       s.tail();
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       const hook = { res, keepAlive: setInterval(() => { try { res.write(' '); } catch {} }, 20e3) };
@@ -1119,6 +1181,26 @@ function createHub(ctx = {}) {
       });
     },
     // Hook UserPromptSubmit: /phone -> chuyển sang điện thoại; gõ tin khác ở máy -> thả về máy.
+    // Hook PreToolUse / PostToolUse: điện thoại bấm dừng -> dừng; có tin đang chờ -> chèn ngay sau tool vừa chạy.
+    hookTool(b, pre) {
+      const s = hub.bridgeFor(b);
+      const br = s.bridge;
+      br.busy = true;
+      s.fileChangedAt = Date.now();
+      if (br.stopReq) {
+        br.stopReq = false;
+        s.store({ kind: 'note', text: 'Đã dừng theo yêu cầu từ điện thoại' });
+        s.broadcastState();
+        return { stop: true, reason: 'Người dùng đã bấm dừng từ điện thoại (CC Remote)' };
+      }
+      if (!pre && br.queue.length) {
+        const text = br.queue.shift();
+        if (!br.attached) s.attach(true);
+        s.broadcastState();
+        return { message: phoneMessage(text) };
+      }
+      return {};
+    },
     hookPrompt(b) {
       const s = hub.bridgeFor(b);
       const p = String(b.prompt || '');
@@ -1127,6 +1209,29 @@ function createHub(ctx = {}) {
       else if (s.bridge.attached) s.attach(false, 'Bạn vừa gõ trên máy — đã thả phiên về máy tính');
       else s.broadcastState();
       return { ok: true };
+    },
+    // Thời gian máy không có thao tác (ms), do idleWatcher cập nhật; null = không biết (không phải Windows).
+    idleMs: null,
+    pcAway() { return hub.idleMs != null && hub.idleMs >= AWAY_MS; },
+    setIdle(ms) {
+      const wasAway = hub.pcAway();
+      hub.idleMs = ms;
+      // vừa quay lại máy: quyền đang hỏi trên điện thoại (do rời máy, không phải đang điều khiển) -> trả về VS Code
+      if (ms != null && ms < 3000) {
+        for (const s of sessions.values()) {
+          if (!s.bridge || s.bridge.attached) continue;
+          for (const [id, p] of [...s.pending]) {
+            if (!p.hook) continue;
+            s.pending.delete(id);
+            clearInterval(p.hook.keepAlive);
+            try { p.hook.res.end(JSON.stringify({ decision: null })); } catch {}
+            s.store({ kind: 'decided', requestId: id, decision: 'cancel' });
+            s.store({ kind: 'note', text: 'Bạn đã quay lại máy — hỏi quyền trên VS Code' });
+            s.broadcastState();
+          }
+        }
+      }
+      if (wasAway !== hub.pcAway()) for (const s of sessions.values()) if (s.bridge) s.broadcastState();
     },
     suggestAccount() {
       const info = accountsInfo();
@@ -1175,6 +1280,7 @@ function createHub(ctx = {}) {
           })),
         } : null,
         ntfy: load().ntfy,
+        alwaysOn: alwaysOn(), pcAway: hub.pcAway(),
       };
     },
     // Đổi tài khoản rồi khởi động lại các phiên đang chạy (phiên đang làm dở thì đợi xong lượt).
@@ -1217,7 +1323,7 @@ function createHub(ctx = {}) {
   };
   // phiên không do mình chạy mà có người xem / đang gắn điện thoại: đọc phần mới của file lịch sử
   const tailTimer = setInterval(() => {
-    for (const s of sessions.values()) if (!s.proc && (s.clients.size || (s.bridge && s.bridge.attached))) s.tail();
+    for (const s of sessions.values()) if (!s.proc && (s.clients.size || (s.bridge && (s.bridge.attached || s.bridge.parked)))) s.tail();
   }, 700);
   tailTimer.unref();
   return hub;
@@ -1297,7 +1403,7 @@ function createRemoteServer(hub) {
         return send(res, 200, { ...pair(String(b.code || '').trim(), b.name), host: os.hostname() });
       }
       if (!p.startsWith('/v1/')) return send(res, 404, { error: 'NOT_FOUND', message: 'Không có' });
-      const hm = /^\/v1\/hook\/(stop|permission|prompt)$/.exec(p);
+      const hm = /^\/v1\/hook\/(stop|permission|prompt|tool|pretool)$/.exec(p);
       if (hm && req.method === 'POST') {
         const key = String(req.headers['x-hook-key'] || '');
         const want = hookKey();
@@ -1306,6 +1412,7 @@ function createRemoteServer(hub) {
         const b = await jsonBody(req);
         if (hm[1] === 'stop') return hub.hookStop(b, req, res);
         if (hm[1] === 'permission') return hub.hookPermission(b, req, res);
+        if (hm[1] === 'tool' || hm[1] === 'pretool') return send(res, 200, hub.hookTool(b, hm[1] === 'pretool'));
         return send(res, 200, hub.hookPrompt(b));
       }
       const dev = authDevice(bearer(req));
@@ -1331,6 +1438,7 @@ function createRemoteServer(hub) {
         return send(res, 200, hub.switchAccount(String(b.id || ''), { sessionId: b.sessionId, text: b.text }));
       }
       if (p === '/v1/ntfy' && req.method === 'POST') return send(res, 200, { ntfy: setNtfy(await jsonBody(req)) });
+      if (p === '/v1/always-on' && req.method === 'POST') return send(res, 200, { alwaysOn: setAlwaysOn((await jsonBody(req)).on !== false) });
       if (p === '/v1/ntfy/test' && req.method === 'POST') {
         return send(res, 200, { ok: await hub.notify('CC Remote', 'Thông báo hoạt động bình thường', null) });
       }
@@ -1363,6 +1471,41 @@ function createRemoteServer(hub) {
   });
 }
 
+// In thời gian máy không có thao tác (GetLastInputInfo) mỗi 2 giây; dùng để biết người dùng còn ngồi ở máy không.
+function startIdleWatcher(hub) {
+  if (process.platform !== 'win32') return null;
+  const script = [
+    'Add-Type @"',
+    'using System; using System.Runtime.InteropServices;',
+    'public static class CCIdle {',
+    '  [StructLayout(LayoutKind.Sequential)] struct L { public uint cb; public uint t; }',
+    '  [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref L l);',
+    '  public static uint Ms() { var l = new L(); l.cb = (uint)Marshal.SizeOf(l); GetLastInputInfo(ref l); return (uint)Environment.TickCount - l.t; }',
+    '}',
+    '"@',
+    'while ($true) { [Console]::Out.WriteLine([CCIdle]::Ms()); [Console]::Out.Flush(); Start-Sleep -Milliseconds 2000 }',
+  ].join('\n');
+  let proc;
+  try {
+    proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+      { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+  } catch { return null; }
+  proc.on('error', () => {});
+  let buf = '';
+  proc.stdout.setEncoding('utf8');
+  proc.stdout.on('data', (d) => {
+    buf += d;
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const n = Number(buf.slice(0, i).trim());
+      buf = buf.slice(i + 1);
+      if (Number.isFinite(n)) hub.setIdle(n);
+    }
+  });
+  process.once('exit', () => { try { proc.kill(); } catch {} });
+  return proc;
+}
+
 // Chạy kèm `node tracker.js serve`. ctx: { accounts(), switchAccount(id) }.
 function start(ctx = {}) {
   const hub = createHub(ctx);
@@ -1373,6 +1516,7 @@ function start(ctx = {}) {
   });
   server.listen(REMOTE_PORT, REMOTE_HOST, () => console.log(`Remote (app iOS): http://${REMOTE_HOST}:${REMOTE_PORT}`));
   setInterval(() => hub.sweep(), MIN).unref();
+  startIdleWatcher(hub);
   const bye = () => { hub.shutdown(); process.exit(0); };
   process.once('SIGINT', bye);
   process.once('SIGTERM', bye);
@@ -1426,9 +1570,12 @@ const HOOK_SCRIPT = path.join(__dirname, 'hook.js').replace(/\\/g, '/');
 const hookCmd = (ev) => `node "${HOOK_SCRIPT}" ${ev}`;
 const isOurHook = (h) => h && typeof h.command === 'string' && h.command.includes('hook.js') && h.command.includes(path.basename(__dirname));
 const HOOKS = [
-  ['Stop', 'stop', { timeout: 86400, statusMessage: 'Chờ lệnh từ điện thoại (CC Remote)…' }],
+  ['Stop', 'stop', { timeout: 86400, statusMessage: 'Sẵn sàng nhận lệnh từ điện thoại (CC Remote) · cứ gõ tiếp bình thường' }],
+  ['SessionStart', 'session', { timeout: 10 }],
   ['PermissionRequest', 'permission', { timeout: 86400 }],
   ['UserPromptSubmit', 'prompt', { timeout: 15 }],
+  ['PreToolUse', 'pretool', { timeout: 10 }],
+  ['PostToolUse', 'tool', { timeout: 15 }],
 ];
 const PHONE_CMD = `---
 description: Chuyển phiên này sang điều khiển từ điện thoại (CC Remote)
@@ -1468,7 +1615,8 @@ function installHooks() {
   data.hooks = data.hooks && typeof data.hooks === 'object' ? data.hooks : {};
   stripOurHooks(data.hooks);
   for (const [ev, arg, extra] of HOOKS) {
-    (data.hooks[ev] ||= []).push({ ...(ev === 'PermissionRequest' ? { matcher: '*' } : {}), hooks: [{ type: 'command', command: hookCmd(arg), ...extra }] });
+    const matcher = ['PermissionRequest', 'PreToolUse', 'PostToolUse'].includes(ev) ? { matcher: '*' } : {};
+    (data.hooks[ev] ||= []).push({ ...matcher, hooks: [{ type: 'command', command: hookCmd(arg), ...extra }] });
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
@@ -1492,6 +1640,7 @@ function uninstallHooks() {
 }
 
 module.exports = {
+  alwaysOn, setAlwaysOn, startIdleWatcher,
   hookKey, hooksStatus, installHooks, uninstallHooks,
   RemoteError, load, newPairCode, pair, authDevice, devices, revoke, setNtfy, notify,
   findClaude, normalize, cleanUserText, toolSummary, readTranscript, recentSessions, projects, projectSessions, sessionFile,

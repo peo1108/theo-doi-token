@@ -39,6 +39,7 @@ server.listen(Number(process.env.SMOKE_PORT) || 7789, '127.0.0.1', async () => {
   const perm = hub.create({ cwd: work, text: 'PERM tạo file ghi chú' });
   const ask = hub.create({ cwd: work, text: 'ASK chọn màu' });
   const limit = hub.create({ cwd: work, text: 'LIMIT' });
+  const ponder = hub.create({ cwd: work, text: 'PONDER: thiết kế lại phần đăng nhập' });
   // phiên "VS Code" giả: lịch sử có bảng markdown, tool Bash + Edit, đang gắn điện thoại
   const ide = '33333333-4444-5555-6666-777777777777';
   const ideDir = path.join(process.env.CLAUDE_PROJECTS_DIR, 'vscode');
@@ -58,7 +59,7 @@ server.listen(Number(process.env.SMOKE_PORT) || 7789, '127.0.0.1', async () => {
   ideSession.attach(true);
 
   await new Promise((r) => setTimeout(r, 1500));
-  const out = { token, chat: chat.id, perm: perm.id, ask: ask.id, limit: limit.id, ide, work };
+  const out = { token, chat: chat.id, perm: perm.id, ask: ask.id, limit: limit.id, ide, work, ponder: ponder.id };
   fs.writeFileSync(path.join(dir, 'smoke.json'), JSON.stringify(out));
   console.log('smoke ready', JSON.stringify(out));
 });

@@ -129,20 +129,22 @@ khung trả lời giống VS Code (markdown đủ bảng/danh sách, tool có IN
 
 ### Điều khiển phiên đang mở trong VS Code / terminal
 
-App mở phiên bằng tiến trình riêng, nên **phiên đang chạy trong VS Code** không tự thấy tin từ điện thoại. Để điều khiển
-đúng phiên đó, cài hook (dashboard → thẻ Điện thoại → bước 4 **Cài hook**, hoặc `node remote.js hooks install`):
+Như điều khiển máy từ xa: mở app là nhắn được vào **đúng phiên đang chạy trong VS Code**, không cần chuẩn bị gì. Cài hook một lần
+(dashboard → thẻ Điện thoại → bước 4 **Cài hook**, hoặc Hook CC Remote: cài thiếu — chạy: node remote.js hooks install), rồi mở lại phiên Claude Code.
 
-1. Mở lại phiên Claude Code (hook chỉ có hiệu lực với phiên mở sau khi cài).
-2. Trước khi rời máy, gõ **`/phone`** trong VS Code. Claude trả lời một câu rồi đứng chờ (dòng trạng thái *Chờ lệnh từ
-   điện thoại*).
-3. Trên app, phiên hiện ở *Đang chạy* với nhãn **VS Code · đã gắn**: gửi tin là Claude trong VS Code làm tiếp, xin quyền
-   thì hỏi trên điện thoại, màn hình máy tính vẫn thấy mọi thứ.
-4. Về máy: gõ bất kỳ tin nào trong VS Code (tự thả về máy) hoặc bấm **Thả về máy** trên app.
+| Trên app | Chuyện gì xảy ra trong VS Code |
+|---|---|
+| Nhắn lúc Claude đang rảnh | Claude làm tiếp ngay (sau mỗi lượt phiên luôn đứng chờ, dòng trạng thái *Sẵn sàng nhận lệnh từ điện thoại*) |
+| Nhắn lúc Claude đang chạy | Tin được chèn ngay sau tool đang chạy, như gõ thêm trong VS Code |
+| Bấm **Dừng** | Claude dừng ở tool kế tiếp (hoặc ở lần xin quyền đang chờ) |
+| Xin quyền | Hỏi trên điện thoại nếu m vừa nhắn từ điện thoại hoặc máy để yên quá 45 giây; đang ngồi máy thì VS Code hỏi |
 
-Cách hoạt động: hook `Stop` giữ phiên chờ tin từ điện thoại rồi đưa vào như lời người dùng, hook `PermissionRequest`
-chuyển hộp thoại xin quyền sang điện thoại, hook `UserPromptSubmit` bắt `/phone`. Khi không gắn điện thoại (hoặc
-tracker không chạy) hook cho qua ngay (~80 ms), phiên chạy như thường. Gỡ: `node remote.js hooks uninstall`
-(`settings.json` được sao lưu thành `settings.json.cc-remote-backup`).
+Ngồi lại máy thì cứ gõ trong VS Code như thường: tracker thấy tin mới (Claude Code ghi ) và nhả hook
+ngay. Muốn chế độ cũ (phải gõ ) thì tắt **Luôn sẵn sàng** trên dashboard hoặc trong Cài đặt của app.
+
+Hook chỉ áp cho phiên VS Code / terminal;  và SDK chạy nền không bị ảnh hưởng. Tracker không chạy thì hook cho
+qua ngay (~80 ms). Gỡ: Hook CC Remote: cài thiếu — chạy: node remote.js hooks install ( được sao lưu thành
+).
 
 ### Cài đặt (một lần)
 

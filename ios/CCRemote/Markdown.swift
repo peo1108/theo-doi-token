@@ -357,3 +357,27 @@ struct TimelineRow<Content: View>: View {
             }
     }
 }
+
+/// Dòng chữ chạy khi Claude đang làm, như VS Code: ký hiệu cam nhấp nháy (· ✢ ✳ ✶ ✻ ✽) + "Vibing…".
+struct SpinnerLine: View {
+    let verb: String
+    private static let frames = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"]
+    private static let coral = Color(red: 0.85, green: 0.47, blue: 0.34)
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.12)) { ctx in
+            let i = Int(ctx.date.timeIntervalSinceReferenceDate / 0.12) % Self.frames.count
+            HStack(spacing: 8) {
+                Text(Self.frames[i])
+                    .font(.body.weight(.bold))
+                    .foregroundStyle(Self.coral)
+                    .frame(width: 16)
+                Text("\(verb)…")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary.opacity(0.85))
+            }
+        }
+        .padding(.leading, 2)
+        .padding(.top, 2)
+    }
+}

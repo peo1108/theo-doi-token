@@ -91,6 +91,11 @@ func effortLabel(_ e: String?) -> String {
     }
 }
 
+struct ThinkingInfo: Codable, Hashable {
+    let tokens: Int
+    let since: Double
+}
+
 struct SessionSummary: Codable, Identifiable, Hashable {
     let id: String
     let settings: SessionSettings?
@@ -99,6 +104,8 @@ struct SessionSummary: Codable, Identifiable, Hashable {
     let source: String?
     let attached: Bool?
     let ready: Bool?
+    let pcAway: Bool?
+    let thinking: ThinkingInfo?
     let cwd: String?
     let project: String?
     let title: String?
@@ -138,6 +145,8 @@ struct RemoteState: Codable {
     let accounts: AccountsInfo?
     let ntfy: NtfyConfig?
     let projects: [Project]?
+    let alwaysOn: Bool?
+    let pcAway: Bool?
 }
 
 struct Project: Codable, Identifiable, Hashable {
@@ -199,13 +208,15 @@ struct Event: Decodable, Identifiable, Hashable {
     let oldText: String?
     let newText: String?
     let via: String?
+    let seconds: Double?
+    let tokens: Int?
 
     var id: Int { seq }
 
     enum CodingKeys: String, CodingKey {
         case kind, seq, t, text, toolId = "id", name, summary, input, error, requestId, tool, canAlways, reason
         case questions, plan, decision, ok, aborted, cost, ms, turns, suggest, toolUseId
-        case title, path, code, oldText = "old", newText = "new", via
+        case title, path, code, oldText = "old", newText = "new", via, seconds, tokens
     }
 }
 

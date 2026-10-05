@@ -107,6 +107,8 @@ jobs:
           xcrun simctl terminate "$UDID" vn.peo.ccremote || true
           xcrun simctl launch "$UDID" vn.peo.ccremote -openProject "$(j work)"
           shot 15-project 5
+          open_s ponder
+          shot 16-thinking 4
           cat "$RUNNER_TEMP/server.log"
 
       - name: Upload screenshots

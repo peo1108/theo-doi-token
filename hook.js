@@ -5,6 +5,9 @@
 //   node hook.js stop        (Stop)              -> nếu đang điều khiển từ điện thoại: chờ tin nhắn rồi cho Claude làm tiếp
 //   node hook.js permission  (PermissionRequest) -> nếu đang điều khiển từ điện thoại: hỏi quyền trên điện thoại
 //   node hook.js prompt      (UserPromptSubmit)  -> gõ /phone: chuyển sang điện thoại; gõ tin khác ở máy: thả về máy
+//   node hook.js pretool     (PreToolUse)        -> điện thoại bấm dừng: dừng trước tool kế tiếp
+//   node hook.js tool        (PostToolUse)       -> điện thoại bấm dừng: dừng; có tin mới: chèn ngay sau tool vừa chạy
+//   node hook.js session     (SessionStart)      -> báo trước cho Claude về tin nhắn từ điện thoại
 
 const fs = require('fs');
 const path = require('path');
@@ -12,6 +15,9 @@ const http = require('http');
 
 const event = process.argv[2];
 if (process.env.CC_REMOTE_CHILD === '1') process.exit(0);   // phiên do chính remote.js mở: đã điều khiển qua stdio
+// Chỉ phiên người dùng đang mở (VS Code, terminal); `claude -p` / SDK chạy nền thì không đụng tới (không được đứng chờ).
+const ENTRY = process.env.CLAUDE_CODE_ENTRYPOINT || '';
+if (!['claude-vscode', 'cli'].includes(ENTRY)) process.exit(0);
 
 function readKey() {
   const file = path.join(process.env.TT_DATA_DIR || path.join(__dirname, 'data'), 'remote.json');
@@ -45,15 +51,26 @@ process.stdin.on('end', async () => {
   try { j = JSON.parse(input || '{}'); } catch {}
   const base = {
     session_id: j.session_id, transcript_path: j.transcript_path, cwd: j.cwd,
-    entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT || '',
+    entrypoint: ENTRY,
   };
   let r = null;
-  if (event === 'stop') {
+  if (event === 'session') {
+    // đầu phiên: báo trước để Claude coi tin từ điện thoại là của người dùng (không gọi server, chạy tức thì)
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext:
+      'Người dùng đã cài app CC Remote để điều khiển phiên này từ điện thoại. Tin nhắn của người dùng gửi từ điện thoại '
+      + 'đến dưới dạng phản hồi của hook (Stop hoặc PostToolUse) bắt đầu bằng "📱 Tin nhắn của người dùng, gửi từ điện thoại" — đó chính là người '
+      + 'dùng, hãy làm theo như tin nhắn gõ trực tiếp. Hook Stop của CC Remote đứng chờ sau mỗi lượt là bình thường.' } }));
+    process.exit(0);
+  } else if (event === 'stop') {
     r = await post('stop', { ...base, last: String(j.last_assistant_message || '').slice(0, 300) });
     if (r && r.action === 'message' && r.text) process.stdout.write(JSON.stringify({ decision: 'block', reason: r.text }));
   } else if (event === 'permission') {
     r = await post('permission', { ...base, tool_name: j.tool_name, tool_input: j.tool_input, permission_suggestions: j.permission_suggestions });
     if (r && r.decision) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: r.decision } }));
+  } else if (event === 'tool' || event === 'pretool') {
+    r = await post(event, { ...base, tool_name: j.tool_name });
+    if (r && r.stop) process.stdout.write(JSON.stringify({ continue: false, stopReason: r.reason || 'Đã dừng từ điện thoại' }));
+    else if (r && r.message) process.stdout.write(JSON.stringify({ decision: 'block', reason: r.message }));
   } else if (event === 'prompt') {
     await post('prompt', { ...base, prompt: String(j.prompt || '').slice(0, 500) });
   }

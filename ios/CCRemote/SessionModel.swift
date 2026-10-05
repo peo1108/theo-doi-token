@@ -15,6 +15,18 @@ final class SessionModel {
     var lastError: String?
     var sending = false
     var scrollTick = 0
+    /// Claude đang nghĩ: số token ước lượng (nil = không nghĩ)
+    var thinkingTokens: Int?
+    /// chữ chạy khi Claude đang làm, như "Vibing…" trong VS Code
+    var spinnerVerb = "Vibing"
+
+    static let verbs = ["Vibing", "Pondering", "Cooking", "Brewing", "Manifesting", "Noodling", "Percolating", "Conjuring",
+                        "Crafting", "Musing", "Simmering", "Tinkering", "Wrangling", "Computing", "Synthesizing", "Clauding"]
+
+    private struct Progress: Decodable {
+        let phase: String
+        let tokens: Int?
+    }
 
     private var epoch = ""
     private var lastSeq = 0
@@ -68,8 +80,16 @@ final class SessionModel {
             epoch = head.epoch ?? ""
         case "state":
             if let s = try? decoder.decode(SessionSummary.self, from: data) {
+                let wasRunning = summary?.status == "running"
                 summary = s
                 epoch = s.epoch
+                if let t = s.thinking { thinkingTokens = t.tokens } else if s.status != "running" { thinkingTokens = nil }
+                if s.status == "running" && !wasRunning { spinnerVerb = SessionModel.verbs.randomElement() ?? "Vibing" }
+            }
+        case "progress":
+            // tức thời, không lưu: "Thinking… · N tokens"
+            if let p = try? decoder.decode(Progress.self, from: data) {
+                thinkingTokens = p.phase == "thinking" ? p.tokens : nil
             }
         default:
             guard let e = try? decoder.decode(Event.self, from: data), e.seq > lastSeq else { return }

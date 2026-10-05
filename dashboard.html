@@ -2111,8 +2111,8 @@ function renderRemote() {
 
   const hk = RM.hooks || {};
   const step4 = (hk.installed
-    ? `${statusHTML('good', 'Đã cài hook')}<p>Trong VS Code gõ <span class="rm-url">/phone</span> để chuyển phiên đang làm sang điện thoại; gõ tin ở máy là tự thả về. Phiên mở trước khi cài cần mở lại một lần.</p>
-      <div class="rm-actions"><button class="ghost sm" data-rm="hooks-off" ${dis}>Gỡ hook</button></div>`
+    ? `${statusHTML('good', 'Đã cài hook')}<p>${RM.alwaysOn ? 'Luôn sẵn sàng: phiên Claude Code trên máy chờ sau mỗi lượt, mở app là nhắn được; gõ ở máy vẫn bình thường. Rời máy quá 45 giây thì xin quyền hiện trên điện thoại.' : 'Đang tắt luôn sẵn sàng: gõ <span class="rm-url">/phone</span> trong VS Code trước khi rời máy.'} Phiên mở trước khi cài cần mở lại một lần.</p>
+      <div class="rm-actions"><button class="ghost sm" data-rm="always-toggle" ${dis}>${RM.alwaysOn ? 'Tắt luôn sẵn sàng' : 'Bật luôn sẵn sàng'}</button><button class="ghost sm" data-rm="hooks-off" ${dis}>Gỡ hook</button></div>`
     : `${statusHTML('info', hk.partial ? 'Cài thiếu' : 'Chưa cài')}<p>Cho điện thoại gửi tin và duyệt quyền ngay trong phiên Claude Code đang mở trên máy (VS Code, terminal). Thêm hook vào <span class="rm-url">~/.claude/settings.json</span> (có sao lưu).</p>
       <div class="rm-actions"><button class="ghost sm primary" data-rm="hooks-on" ${dis}>Cài hook</button></div>`);
   box.innerHTML = `<div class="rm-step"><h3>1 · Kết nối</h3>${step1}</div>
@@ -2135,7 +2135,8 @@ els('rmBody').addEventListener('click', async e => {
     if (act === 'pair') await acctPost('/api/remote/pair');
     else if (act === 'revoke') { await acctPost('/api/remote/revoke', { id: b.dataset.id }); setRmMsg('ok', 'Đã thu hồi thiết bị'); }
     else if (act === 'ntfy') { const r = await acctPost('/api/remote/ntfy', { topic }); setRmMsg('ok', r.ntfy ? 'Đã bật thông báo ntfy' : 'Đã tắt thông báo ntfy'); }
-    else if (act === 'hooks-on' || act === 'hooks-off') { const r = await acctPost('/api/remote/hooks', { on: act === 'hooks-on' }); setRmMsg('ok', r.installed ? 'Đã cài hook — mở lại phiên Claude Code rồi gõ /phone' : 'Đã gỡ hook'); }
+    else if (act === 'always-toggle') { const r = await acctPost('/api/remote/always-on', { on: !RM.alwaysOn }); setRmMsg('ok', r.alwaysOn ? 'Đã bật luôn sẵn sàng' : 'Đã tắt luôn sẵn sàng'); }
+    else if (act === 'hooks-on' || act === 'hooks-off') { const r = await acctPost('/api/remote/hooks', { on: act === 'hooks-on' }); setRmMsg('ok', r.installed ? 'Đã cài hook — mở lại phiên Claude Code là điện thoại điều khiển được' : 'Đã gỡ hook'); }
     else if (act === 'ntfy-test') { const r = await acctPost('/api/remote/ntfy-test'); setRmMsg(r.ok ? 'ok' : 'err', r.ok ? 'Đã gửi — kiểm tra app ntfy' : 'Gửi không được'); }
     else if (act === 'serve') { const r = await acctPost('/api/remote/serve'); setRmMsg(r.ok ? 'ok' : 'err', r.ok ? 'Đã mở cho điện thoại' : 'Tailscale báo: ' + r.output); }
   } catch (err) { setRmMsg('err', err.message); }

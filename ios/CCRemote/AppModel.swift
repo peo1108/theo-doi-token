@@ -127,6 +127,12 @@ final class AppModel {
         await refresh()
     }
 
+    func setAlwaysOn(_ on: Bool) async throws {
+        guard let api else { return }
+        let _: Ignored = try await api.call("POST", "/v1/always-on", body: ["on": on])
+        await refresh()
+    }
+
     func testNtfy() async throws -> Bool {
         guard let api else { return false }
         struct R: Decodable { let ok: Bool }
