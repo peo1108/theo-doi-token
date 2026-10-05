@@ -141,16 +141,23 @@
   }
   .ghost:hover { color: var(--text); background: var(--tile); }
   .ghost svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.7; }
+  .ghost:disabled { opacity: .5; cursor: default; }
+  .ghost.sm { font-size: 12.5px; padding: 5px 11px; }
   .ghost.primary { background: var(--accent); color: #fff; }
   .ghost.primary:hover { filter: brightness(1.08); background: var(--accent); color: #fff; }
 
   .seg { display: flex; gap: 4px; background: var(--card); border-radius: 9px; padding: 3px; }
   .seg button { font: inherit; font-size: 13.5px; padding: 5px 13px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; transition: background-color .12s ease, color .12s ease; }
   .seg button:hover { color: var(--text); }
+  #acctSeg { flex-wrap: wrap; max-width: 100%; }
+  #acctSeg button { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .seg button.is-active { background: var(--raised); color: var(--text); font-weight: 500; box-shadow: 0 1px 2px rgba(11,11,11,.06); }
 
   .banner { background: var(--bad-bg); color: var(--text); border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; font-size: 13.5px; line-height: 1.6; }
   .banner code { background: var(--tile); border-radius: 5px; padding: 1px 6px; }
+  .banner.warn { background: var(--warn-bg); }
+  .banner-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  [hidden] { display: none !important; }
 
   /* ---------------- KPI ---------------- */
   .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
@@ -259,6 +266,34 @@
   .status.bad  { color: var(--bad);  background: var(--bad-bg); }
   .status.info { color: var(--muted); background: var(--tile); }
 
+  /* ---------------- tài khoản ---------------- */
+  .acct { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, .9fr) auto; gap: 10px 20px; align-items: center; padding: 13px 0; border-top: 1px solid var(--line); }
+  .acct-list .acct:first-child { border-top: 0; padding-top: 2px; }
+  .a-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+  .a-name { font: inherit; font-size: 14.5px; font-weight: 600; color: var(--text); background: transparent; border: 0; border-bottom: 1px dashed var(--ink-soft); padding: 0; cursor: text; max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+  .a-name:hover { border-bottom-color: var(--text); }
+  .a-name:disabled { cursor: default; }
+  .a-edit { font: inherit; font-size: 14px; font-weight: 600; color: var(--text); background: var(--raised); border: 1px solid var(--focus); box-shadow: 0 0 0 3px var(--accent-soft); border-radius: 7px; padding: 3px 8px; outline: none; width: 100%; max-width: 220px; }
+  .a-sub { font-size: 12.5px; color: var(--muted); margin-top: 4px; line-height: 1.5; overflow-wrap: anywhere; }
+  .a-err { font-size: 12px; color: var(--bad); margin-top: 4px; }
+  .meter .m-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--muted); }
+  .meter .m-top b { font-size: 14px; color: var(--text); font-weight: 600; }
+  .meter .m-top b.warn { color: var(--warn); }
+  .meter .m-top b.bad { color: var(--bad); }
+  .meter .m-track { height: 7px; border-radius: 4px; background: var(--tile); overflow: hidden; margin-top: 6px; }
+  .meter .m-track i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .5s ease; }
+  .meter .m-track i.warn { background: var(--warn); }
+  .meter .m-track i.bad { background: var(--bad); }
+  .meter .m-foot { font-size: 11.5px; color: var(--muted); margin-top: 5px; }
+  .a-cost { font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+  .a-cost b { color: var(--text); font-weight: 600; }
+  .a-cost .status { margin-top: 3px; }
+  .a-act { justify-self: end; }
+  .acct.is-bad { grid-template-columns: minmax(0, 1fr); padding: 9px 0; }
+  .acct-msg { font-size: 12.5px; padding: 7px 11px; border-radius: 8px; background: var(--tile); color: var(--text); line-height: 1.5; }
+  .acct-msg.ok { background: var(--good-bg); }
+  .acct-msg.err { background: var(--bad-bg); }
+
   .budget + .budget { margin-top: 14px; }
   .budget .b-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; }
   .budget .b-top b { font-size: 15px; }
@@ -349,12 +384,15 @@
   .empty { padding: 22px 0; text-align: center; color: var(--muted); font-size: 13px; }
 
   @media (max-width: 980px) {
+    .acct { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .acct .a-id, .acct .a-act { grid-column: 1 / -1; }
+    .a-act { justify-self: start; }
     .grid, .grid3 { grid-template-columns: minmax(0, 1fr); }
     .kpis, .minis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 620px) {
     .wrap { padding: 20px 16px 40px; }
-    .kpis, .minis, .form { grid-template-columns: minmax(0, 1fr); }
+    .kpis, .minis, .form, .acct { grid-template-columns: minmax(0, 1fr); }
     .kpi .k-value { font-size: 24px; }
     .hm { grid-template-columns: 44px repeat(24, minmax(0, 1fr)); gap: 1px; }
   }
@@ -379,6 +417,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Xuất CSV
       </button>
+      <div class="seg" id="acctSeg" role="group" aria-label="Lọc theo tài khoản" hidden></div>
       <div class="seg" id="rangeSeg">
         <button class="is-active" data-range="24h">24 giờ</button>
         <button data-range="7d">7 ngày</button>
@@ -391,6 +430,19 @@
   </header>
 
   <div class="banner" id="banner" hidden></div>
+  <div class="banner warn" id="conflict" hidden></div>
+
+  <!-- ============ tài khoản ============ -->
+  <section class="card" id="acctCard" style="margin-bottom:10px">
+    <div class="card-head">
+      <div>
+        <h2>Tài khoản</h2>
+        <div class="card-sub">Hạn mức lấy từ Claude · bấm vào tên để đổi tên · <b>Đổi</b> sẽ ghi đè đăng nhập của Claude Code</div>
+      </div>
+      <span class="acct-msg" id="acctMsg" hidden></span>
+    </div>
+    <div class="acct-list" id="acctList"></div>
+  </section>
 
   <!-- ============ cửa sổ 5 giờ + ngân sách ============ -->
   <section class="grid">
@@ -410,7 +462,7 @@
 
     <aside class="card">
       <h2>Ngân sách</h2>
-      <div class="card-sub">Quy đổi theo giá API · tuần tính từ thứ Hai</div>
+      <div class="card-sub">Quy đổi theo giá API · tuần tính từ thứ Hai<span id="budScope"></span></div>
       <div class="mt10" id="budgets"></div>
 
       <details class="settings" id="settings">
@@ -421,6 +473,7 @@
           <label class="fld"><span>Báo khi cache hit dưới (%)</span><input type="number" min="0" max="100" step="1" name="alertCacheHit"></label>
           <label class="fld"><span>Báo khi ngữ cảnh vượt (token)</span><input type="number" min="0" step="10000" name="alertContext"></label>
           <label class="fld"><span>Báo khi cửa sổ 5h gấp (lần TB)</span><input type="number" min="1" step="0.1" name="alertWindowRatio"></label>
+          <label class="fld"><span>Báo khi hạn mức tài khoản đạt (%)</span><input type="number" min="0" max="100" step="1" name="alertLimitPct"></label>
           <label class="chk"><input type="checkbox" name="notify"> Gửi thông báo Windows</label>
           <div class="form-actions">
             <button class="ghost primary" type="submit">Lưu</button>
@@ -641,8 +694,11 @@ const REFRESH_MS = 30e3;
 const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max', ''];
 
 let RANGE = '24h', metric = 'token', animate = true;
-let R = null, P = null, ROWS = [], CHAINS = null, BREAKS = [], SUM = null, CFG = null;
+let R = null, P = null, ALL_ROWS = [], ROWS = [], CHAINS = null, BREAKS = [], SUM = null, CFG = null;
 let selectedSession = null;
+// tài khoản đang lọc: 'all' hoặc id hồ sơ (nhớ trong localStorage)
+let ACCOUNT = 'all';
+try { ACCOUNT = localStorage.getItem('tt-account') || 'all'; } catch {}
 
 /* =========================================================================
    2. ĐỊNH DẠNG
@@ -743,14 +799,36 @@ function decode(data) {
   });
 }
 
+/* ---- tài khoản: dữ liệu từ server + bộ lọc ---- */
+const acctInfo = () => (R && R.accounts) || { active: null, fileAccount: null, conflict: null, accounts: [] };
+const goodAccts = () => acctInfo().accounts.filter(a => !a.error);
+function accountName(id) {
+  if (!id) return 'Chưa gán';
+  const a = acctInfo().accounts.find(x => x.id === id);
+  return (a && !a.error && a.name) || id;
+}
+function setAccount(id) {
+  ACCOUNT = id;
+  try { localStorage.setItem('tt-account', id); } catch {}
+}
+// id đã lưu không còn trong danh sách (hoặc chưa đủ 2 hồ sơ để lọc) -> xem tất cả
+function normalizeAccount() {
+  if (ACCOUNT !== 'all' && (goodAccts().length < 2 || !goodAccts().some(a => a.id === ACCOUNT))) ACCOUNT = 'all';
+}
+function applyFilter() {
+  ROWS = ACCOUNT === 'all' ? ALL_ROWS : ALL_ROWS.filter(r => r.account === ACCOUNT);
+  CHAINS = A.chains(ROWS);
+  BREAKS = A.cacheBreaks(CHAINS, P);
+  SUM = A.summary(ROWS, R.now);
+}
+
 function ingest(data) {
   R = data;
   CFG = data.config;
   P = A.pricing(data.meta);
-  ROWS = A.enrich(decode(data), P);
-  CHAINS = A.chains(ROWS);
-  BREAKS = A.cacheBreaks(CHAINS, P);
-  SUM = A.summary(ROWS, data.now);
+  ALL_ROWS = A.enrich(decode(data), P);
+  normalizeAccount();
+  applyFilter();
 }
 
 /* =========================================================================
@@ -780,6 +858,7 @@ function compute() {
     starts = [...Array(25)].map((_, i) => h0 + i * HOUR);
   }
   D.points = starts.length - 1;
+  D.starts = starts;
   D.labels = starts.slice(0, -1).map(t => {
     const d = new Date(t);
     return isWeek ? { label: DOW[d.getDay()], date: `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`, t } : { label: pad(d.getHours()) + 'h', t };
@@ -948,8 +1027,10 @@ function budgetRow(label, spent, limit, foot) {
     <div class="b-foot">${nf(p * 100, 0)}% · ${foot}</div></div>`;
 }
 
+const CFG_KEYS = ['budgetDay', 'budgetWeek', 'alertCacheHit', 'alertContext', 'alertWindowRatio', 'alertLimitPct'];
 function renderBudget() {
   const now = new Date(R.now);
+  els('budScope').textContent = ACCOUNT === 'all' ? '' : ' · chỉ tính ' + accountName(ACCOUNT);
   const leftDay = A.startOfDay(R.now) + DAY - R.now;
   const weekEnd = A.startOfWeek(R.now) + 7 * DAY;
   els('budgets').innerHTML =
@@ -958,7 +1039,7 @@ function renderBudget() {
 
   const f = els('cfgForm');
   if (!f.contains(document.activeElement)) {
-    for (const k of ['budgetDay', 'budgetWeek', 'alertCacheHit', 'alertContext', 'alertWindowRatio']) f.elements[k].value = CFG[k];
+    for (const k of CFG_KEYS) f.elements[k].value = CFG[k] ?? '';
     f.elements.notify.checked = !!CFG.notify;
   }
 
@@ -972,7 +1053,8 @@ function renderBudget() {
 els('cfgForm').addEventListener('submit', async e => {
   e.preventDefault();
   const f = e.target, body = {};
-  for (const k of ['budgetDay', 'budgetWeek', 'alertCacheHit', 'alertContext', 'alertWindowRatio']) body[k] = Number(f.elements[k].value) || 0;
+  for (const k of CFG_KEYS) body[k] = Number(f.elements[k].value) || 0;
+  body.alertLimitPct = Math.min(100, body.alertLimitPct);
   body.notify = f.elements.notify.checked;
   try {
     const res = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -1093,6 +1175,11 @@ function renderBars() {
     hit.style.cursor = 'crosshair';
     svg.appendChild(hit);
   });
+  drawSwitchMarks(svg, accountMarks(D.from, D.to), t => {
+    let i = D.starts.length - 2;
+    while (i > 0 && D.starts[i] > t) i--;
+    return VB.l + BAND * (i + (t - D.starts[i]) / (D.starts[i + 1] - D.starts[i]));
+  }, VB.t, VB.t + PH, clearBarHover);
   svg.appendChild(mk('line', { id: 'guide', y1: VB.t, y2: VB.t + PH, class: 'ref', 'stroke-width': 1, 'stroke-dasharray': '3 3' }));
 
   if (animate) {
@@ -1142,12 +1229,13 @@ svg.addEventListener('mouseover', e => {
   const hit = e.target.closest('rect[data-i]');
   if (hit) showTip(+hit.dataset.i, hit);
 });
-wrap.addEventListener('mouseleave', () => {
+function clearBarHover() {
   tip.classList.remove('show');
   svg.classList.remove('dim');
   svg.querySelectorAll('g.bar.on').forEach(g => g.classList.remove('on'));
   const g = els('guide'); if (g) g.style.opacity = 0;
-});
+}
+wrap.addEventListener('mouseleave', clearBarHover);
 
 function renderCum() {
   const s = els('cum'); s.textContent = '';
@@ -1510,7 +1598,8 @@ function renderHistory() {
     const k = A.dayKey(t);
     let cost = 0, tk = 0, n = 0;
     for (const [mk_, v] of Object.entries(daily[k] || {})) {
-      const [model, fast] = mk_.split('|');
+      const [account, model, fast] = mk_.split('|');   // khoá: tài khoản|model[|fast]
+      if (ACCOUNT !== 'all' && account !== ACCOUNT) continue;
       cost += P.cost({ model, fast: fast ? 1 : 0, i: v.i, o: v.o, w5: v.w5, w1: v.w1, cr: v.cr }).total;
       tk += v.i + v.o + v.w5 + v.w1 + v.cr; n += v.n;
     }
@@ -1550,6 +1639,13 @@ function renderHistory() {
     hit.addEventListener('mouseleave', hideF);
     svgH.appendChild(hit);
   });
+  const hFrom = days[0].t, hTo = today + DAY;
+  drawSwitchMarks(svgH, accountMarks(hFrom, hTo), t => {
+    let i = days.length - 1;
+    while (i > 0 && days[i].t > t) i--;
+    const next = i + 1 < days.length ? days[i + 1].t : days[i].t + DAY;
+    return V.l + band * (i + (t - days[i].t) / (next - days[i].t));
+  }, V.t, V.t + ph);
   els('histLegend').innerHTML = `<span>${days.length} ngày · theo ${metric === 'cost' ? 'chi phí' : 'token'}</span>`;
 
   const now = new Date(R.now);
@@ -1619,8 +1715,257 @@ function renderHead() {
   els('mainSub').textContent   = (metric === 'cost' ? 'Cột xếp chồng theo loại token, quy ra USD · ' : 'Cột xếp chồng theo loại token · ') + peak;
   els('cumTotal').textContent  = `${usd(D.totalCost)} · trung bình ${usd(D.meanCost)}/${D.unit}`;
   els('cumPeriod').textContent = D.per;
-  els('pageTitle').textContent = `Token Claude Code · ${D.per} qua`;
+  els('pageTitle').textContent = `Token Claude Code · ${D.per} qua` + (ACCOUNT === 'all' ? '' : ` · ${accountName(ACCOUNT)}`);
   document.title = SUM.window ? `${usd(SUM.window.cost)} · reset ${hhmm(SUM.window.end)} — Token Claude Code` : 'Token Claude Code';
+}
+
+/* =========================================================================
+   11b. TÀI KHOẢN: thẻ, băng ghi đè, bộ lọc, vạch mốc đổi
+   ========================================================================= */
+const dm = t => { const d = new Date(t); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`; };
+const dmHm = t => `${dm(t)} ${hhmm(t)}`;
+function agoText(t, now) {
+  const m = Math.floor(Math.max(0, now - t) / MIN);
+  if (m < 1) return 'vừa xong';
+  if (m < 60) return m + ' phút trước';
+  const h = Math.floor(m / 60);
+  return h < 24 ? h + ' giờ trước' : Math.floor(h / 24) + ' ngày trước';
+}
+
+const ACCT_ERR = {
+  NOT_FOUND: 'Không tìm thấy hồ sơ này — có thể đã bị xoá',
+  AMBIGUOUS: 'Tên khớp nhiều hồ sơ, hãy dùng tên đầy đủ',
+  LOCKED: 'Đang có thao tác đổi tài khoản khác, thử lại sau vài giây',
+  NO_TOKEN: 'Hồ sơ này không còn token — cần /login lại trong Claude Code',
+  WRITE_FAILED: 'Không ghi được file đăng nhập, thử lại sau',
+  ACTIVE: 'Đây đang là tài khoản đang dùng',
+  NAME_TAKEN: 'Tên này đã có',
+  FORMAT: 'Dữ liệu không hợp lệ hoặc file đăng nhập có định dạng lạ',
+  FORBIDDEN: 'Yêu cầu bị từ chối'
+};
+const acctErrText = e => ACCT_ERR[e.code] || e.message || 'Lỗi không rõ';
+
+async function acctPost(path, body) {
+  let res;
+  try {
+    res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token-Tracker': '1' }, body: JSON.stringify(body || {}) });
+  } catch {
+    throw Object.assign(new Error('Không kết nối được tới server'), { code: 'NETWORK' });
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  if (!res.ok) throw Object.assign(new Error((data && data.message) || 'HTTP ' + res.status), { code: (data && data.error) || 'HTTP_' + res.status });
+  return data;
+}
+
+let ACCT_BUSY = false;      // đang chờ server: khoá các nút
+let ACCT_MSG = null;        // { kind: 'ok' | 'err', text }
+let RENAMING = null;        // { id, value, error, fresh }
+let acctMsgTimer = 0;
+
+function setAcctMsg(kind, text) {
+  ACCT_MSG = kind ? { kind, text } : null;
+  clearTimeout(acctMsgTimer);
+  if (kind === 'ok') acctMsgTimer = setTimeout(() => { ACCT_MSG = null; renderAcctMsg(); }, 25e3);
+  renderAcctMsg();
+}
+function renderAcctMsg() {
+  const el = els('acctMsg');
+  el.hidden = !ACCT_MSG;
+  el.className = 'acct-msg' + (ACCT_MSG ? ' ' + ACCT_MSG.kind : '');
+  el.textContent = ACCT_MSG ? ACCT_MSG.text : '';
+}
+
+function meterHTML(label, u, weekly) {
+  if (!u) return `<div class="meter"><div class="m-top"><span>${label}</span><b>—</b></div><div class="m-track"></div><div class="m-foot">Chưa có số liệu</div></div>`;
+  const lim = CFG.alertLimitPct ?? 90;
+  const p = Math.max(0, u.pct);
+  const cls = lim > 0 && p >= lim ? 'bad' : p >= 70 ? 'warn' : '';
+  const reset = u.resetsAt != null ? 'reset ' + (weekly ? dmHm(u.resetsAt) : hhmm(u.resetsAt)) : 'chưa rõ giờ reset';
+  return `<div class="meter"><div class="m-top"><span>${label}</span><b class="${cls}">${nf(p, 0)}%</b></div>
+    <div class="m-track"><i class="${cls}" style="width:${Math.min(100, p)}%"></i></div>
+    <div class="m-foot">${reset}</div></div>`;
+}
+
+function loginHTML(a) {
+  if (a.loginState === 'expired') return statusHTML('bad', 'Hết hạn đăng nhập — cần /login lại');
+  if (a.loginState === 'soon') return statusHTML('warn', `Sắp hết hạn đăng nhập (${dm(a.loginExpiresAt)})`);
+  if (a.loginState === 'ok' && a.loginExpiresAt != null) return `<div>Đăng nhập đến ${dm(a.loginExpiresAt)}</div>`;
+  return '';
+}
+
+function acctRow(a, info) {
+  if (a.error) return `<div class="acct is-bad">${statusHTML('bad', `Hồ sơ ${esc(a.id)} bị hỏng`)}</div>`;
+  const isActive = a.id === info.active;
+  const editing = RENAMING && RENAMING.id === a.id;
+  const nameEl = editing
+    ? `<input class="a-edit" data-id="${esc(a.id)}" value="${esc(RENAMING.value)}" maxlength="40" aria-label="Tên mới" ${ACCT_BUSY ? 'disabled' : ''}>`
+    : `<button class="a-name" data-act="rename" data-id="${esc(a.id)}" title="Bấm để đổi tên" ${ACCT_BUSY ? 'disabled' : ''}>${esc(a.name || a.id)}</button>`;
+  const tag = isActive ? statusHTML('good', 'Đang dùng') : a.suggested ? statusHTML('info', 'Gợi ý') : '';
+  const u = a.usage || {};
+  const sub = [a.email && esc(a.email), a.plan && esc(a.plan),
+    u.fetchedAt != null ? 'cập nhật ' + agoText(u.fetchedAt, R.now) : (u.fiveHour || u.sevenDay ? '' : 'chưa có số liệu hạn mức')].filter(Boolean).join(' · ');
+  return `<div class="acct${isActive ? ' is-active' : ''}">
+    <div class="a-id">
+      <div class="a-title">${nameEl}${tag}</div>
+      ${editing && RENAMING.error ? `<div class="a-err">${esc(RENAMING.error)}</div>` : ''}
+      <div class="a-sub">${sub}</div>
+    </div>
+    ${meterHTML('5 giờ', u.fiveHour, false)}
+    ${meterHTML('Tuần', u.sevenDay, true)}
+    <div class="a-cost"><div>Hôm nay <b>${usd(a.costToday || 0)}</b> · tuần <b>${usd(a.costWeek || 0)}</b></div>${loginHTML(a)}</div>
+    <div class="a-act">${isActive ? '' : `<button class="ghost sm primary" data-act="switch" data-id="${esc(a.id)}" ${ACCT_BUSY ? 'disabled' : ''}>Đổi</button>`}</div>
+  </div>`;
+}
+
+// force: vẽ lại cả khi đang gõ tên (lần làm mới nền 30 giây bỏ qua để không mất chữ đang gõ)
+function renderAccounts(force) {
+  if (!R || (RENAMING && !force)) return;
+  const info = acctInfo();
+  els('acctList').innerHTML = info.accounts.length
+    ? info.accounts.map(a => acctRow(a, info)).join('')
+    : `<div class="empty">Chưa có tài khoản — /login trong Claude Code, tài khoản sẽ tự xuất hiện</div>`;
+  renderAcctMsg();
+  if (RENAMING) {
+    const i = els('acctList').querySelector('.a-edit');
+    if (i && !i.disabled) {
+      i.focus();
+      if (RENAMING.fresh) { i.select(); RENAMING.fresh = false; } else i.setSelectionRange(i.value.length, i.value.length);
+    }
+  }
+}
+
+function renderConflict() {
+  const c = acctInfo().conflict, el = els('conflict');
+  if (!c) { el.hidden = true; el.innerHTML = ''; return; }
+  const I = accountName(c.chosenId), F = accountName(c.fileId);
+  el.hidden = false;
+  el.innerHTML = `<b>Tài khoản bị ghi đè ngoài tracker.</b> Từ ${dShort(c.since)} ${hhmm(c.since)}, đăng nhập của Claude Code là <b>${esc(F)}</b>
+    nhưng tracker vẫn ghi nhận <b>${esc(I)}</b> — có thể bạn vừa /login hoặc đổi tài khoản bằng công cụ khác. Chọn tài khoản đang thật sự dùng để số liệu được tính đúng.
+    ${ACCT_MSG && ACCT_MSG.kind === 'err' ? `<div class="a-err">${esc(ACCT_MSG.text)}</div>` : ''}
+    <div class="banner-actions">
+      <button class="ghost sm primary" data-act="apply" data-id="${esc(c.chosenId)}" ${ACCT_BUSY ? 'disabled' : ''}>Áp lại ${esc(I)}</button>
+      <button class="ghost sm" data-act="keep" ${ACCT_BUSY ? 'disabled' : ''}>Giữ ${esc(F)}</button>
+    </div>`;
+}
+
+function renderAcctFilter() {
+  const seg = els('acctSeg'), list = goodAccts();
+  if (list.length < 2) { seg.hidden = true; seg.innerHTML = ''; return; }
+  seg.hidden = false;
+  seg.innerHTML = [['all', 'Tất cả'], ...list.map(a => [a.id, a.name || a.id])].map(([id, n]) =>
+    `<button data-acct="${esc(id)}" title="${esc(n)}" class="${id === ACCOUNT ? 'is-active' : ''}">${esc(n)}</button>`).join('');
+}
+els('acctSeg').addEventListener('click', e => {
+  const b = e.target.closest('button[data-acct]');
+  if (!b || !R || b.dataset.acct === ACCOUNT) return;
+  setAccount(b.dataset.acct);
+  animate = true;
+  applyFilter();
+  renderAll();
+});
+
+const refreshAcctUI = () => { renderConflict(); renderAccounts(true); };
+
+// chạy một thao tác tài khoản: khoá nút trong lúc chờ, xong thì nạp lại dữ liệu
+async function acctAction(fn) {
+  if (ACCT_BUSY) return;
+  ACCT_BUSY = true;
+  setAcctMsg(null);
+  refreshAcctUI();
+  try { await fn(); }
+  catch (e) { setAcctMsg('err', acctErrText(e)); }
+  ACCT_BUSY = false;
+  refreshAcctUI();
+  load();
+}
+const doSwitch = id => acctAction(async () => {
+  RENAMING = null;
+  const r = await acctPost('/api/accounts/switch', { id });
+  const n = (r.running || []).length;
+  let t = r.already ? `Đang dùng ${accountName(r.to)} rồi` : `Đã đổi sang ${accountName(r.to)}`;
+  if (n > 0) t += ` · ${n} phiên đang chạy vẫn dùng tài khoản cũ cho tới khi khởi động lại`;
+  else if (r.checked === false) t += ' · chưa kiểm tra được các phiên Claude đang chạy';
+  setAcctMsg('ok', t);
+});
+const doKeep = () => acctAction(async () => {
+  const r = await acctPost('/api/accounts/keep');
+  setAcctMsg('ok', `Đã giữ ${accountName(r.id)}`);
+});
+
+async function doRename() {
+  if (!RENAMING || ACCT_BUSY) return;
+  const cur = acctInfo().accounts.find(a => a.id === RENAMING.id);
+  const name = RENAMING.value.trim();
+  if (!name) { RENAMING.error = 'Tên không được để trống'; return renderAccounts(true); }
+  if (cur && name === cur.name) { RENAMING = null; return renderAccounts(true); }
+  ACCT_BUSY = true;
+  RENAMING.error = '';
+  renderAccounts(true);
+  try {
+    await acctPost('/api/accounts/rename', { id: RENAMING.id, name });
+    RENAMING = null;
+    setAcctMsg('ok', `Đã đổi tên thành ${name}`);
+    ACCT_BUSY = false;
+    refreshAcctUI();
+    load();
+  } catch (e) {
+    ACCT_BUSY = false;
+    if (RENAMING) RENAMING.error = acctErrText(e);
+    renderAccounts(true);
+  }
+}
+
+els('acctList').addEventListener('click', e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b || b.disabled) return;
+  if (b.dataset.act === 'switch') doSwitch(b.dataset.id);
+  else if (b.dataset.act === 'rename') {
+    const a = acctInfo().accounts.find(x => x.id === b.dataset.id);
+    RENAMING = { id: b.dataset.id, value: (a && a.name) || b.dataset.id, error: '', fresh: true };
+    setAcctMsg(null);
+    renderAccounts(true);
+  }
+});
+els('acctList').addEventListener('input', e => { if (RENAMING && e.target.classList.contains('a-edit')) RENAMING.value = e.target.value; });
+els('acctList').addEventListener('keydown', e => {
+  if (!RENAMING || !e.target.classList.contains('a-edit')) return;
+  if (e.key === 'Enter') { e.preventDefault(); doRename(); }
+  else if (e.key === 'Escape') { e.preventDefault(); RENAMING = null; renderAccounts(true); }
+});
+els('acctList').addEventListener('focusout', e => {
+  if (!RENAMING || ACCT_BUSY || !e.target.classList.contains('a-edit') || !e.target.isConnected) return;
+  const to = e.relatedTarget;
+  if (to && els('acctList').contains(to)) return;
+  RENAMING = null;
+  renderAccounts(true);
+});
+els('conflict').addEventListener('click', e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b || b.disabled) return;
+  if (b.dataset.act === 'apply') doSwitch(b.dataset.id); else doKeep();
+});
+
+/* --- vạch mốc đổi tài khoản trên biểu đồ theo thời gian --- */
+const accountMarks = (from, to) => (R.accountLog || []).filter(e => e.t > 0 && e.t >= from && e.t < to);
+const MARK_VERB = { switch: 'Đổi sang', init: 'Bắt đầu với', login: 'Đăng nhập', keep: 'Giữ nguyên' };
+function markHTML(e) {
+  const warn = e.running > 0
+    ? `<div class="t-prev" style="color:var(--warn)">${e.running} phiên đang chạy lúc đổi —<br>số liệu sau mốc này có thể bị tính sai tài khoản</div>` : '';
+  return `<div class="t-head">${MARK_VERB[e.reason] || 'Đổi sang'} ${esc(accountName(e.id))}</div>
+    <div class="t-prev" style="margin-top:0">${dShort(e.t)} ${hhmm(e.t)}</div>${warn}`;
+}
+function drawSwitchMarks(target, marks, xOf, y1, y2, onEnter) {
+  for (const e of marks) {
+    const x = +xOf(e.t).toFixed(1);
+    target.appendChild(mk('line', { x1: x, x2: x, y1, y2, class: 'gl', 'stroke-dasharray': '4 3', 'stroke-width': 1.2, style: 'stroke:var(--accent);pointer-events:none' }));
+    target.appendChild(mk('path', { d: `M${x - 4} ${y1 - 9}L${x + 4} ${y1 - 9}L${x} ${y1 - 2}Z`, style: 'fill:var(--accent);pointer-events:none' }));
+    const hit = mk('circle', { cx: x, cy: y1 - 5, r: 8, fill: 'transparent' });
+    hit.style.pointerEvents = 'all';
+    hit.addEventListener('mouseenter', () => { if (onEnter) onEnter(); showF(markHTML(e), hit); });
+    hit.addEventListener('mouseleave', hideF);
+    target.appendChild(hit);
+  }
 }
 
 /* =========================================================================
@@ -1629,6 +1974,7 @@ function renderHead() {
 function renderAll() {
   if (!R) return;
   compute();
+  renderAcctFilter(); renderConflict(); renderAccounts();
   renderHead(); renderWindow(); renderBudget();
   renderKPIs(); renderBars(); renderCum(); renderSide(); renderMinis();
   renderHeatmap(); renderAgents(); renderEffort();
@@ -1637,9 +1983,9 @@ function renderAll() {
   animate = false;
 }
 
-let loading = false;
+let loading = false, loadAgain = false;
 async function load() {
-  if (loading) return;
+  if (loading) { loadAgain = true; return; }   // đang nạp: nạp lại ngay sau đó để thấy thay đổi vừa ghi
   loading = true;
   try {
     const res = await fetch('/api/records', { cache: 'no-store' });
@@ -1660,6 +2006,7 @@ async function load() {
       : `Không đọc được dữ liệu: ${esc(err.message)}. Kiểm tra server <code>node tracker.js serve</code> còn chạy không.`;
   } finally {
     loading = false;
+    if (loadAgain) { loadAgain = false; load(); }
   }
 }
 
@@ -1668,10 +2015,10 @@ async function load() {
    ========================================================================= */
 els('exportBtn').addEventListener('click', () => {
   if (!R) return;
-  const head = ['Thoi diem', 'Phien', 'Project', 'Agent', 'Model', 'Effort', 'Fast', 'Input', 'Output', 'Cache ghi 5p', 'Cache ghi 1h', 'Cache doc', 'Thinking', 'Ngu canh', 'Chi phi USD'];
+  const head = ['Thoi diem', 'Phien', 'Project', 'Agent', 'Model', 'Effort', 'Fast', 'Input', 'Output', 'Cache ghi 5p', 'Cache ghi 1h', 'Cache doc', 'Thinking', 'Ngu canh', 'Chi phi USD', 'Tai khoan'];
   const lines = [head.join(',')].concat(D.rows.map(r => [
     new Date(r.t).toISOString(), r.session, JSON.stringify(r.project), r.agent, r.model, r.effort, r.fast,
-    r.i, r.o, r.w5, r.w1, r.cr, r.th, r.ctx, r.c.total.toFixed(6)
+    r.i, r.o, r.w5, r.w1, r.cr, r.th, r.ctx, r.c.total.toFixed(6), JSON.stringify(r.account ? accountName(r.account) : '')
   ].join(',')));
   const url = URL.createObjectURL(new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');
