@@ -127,12 +127,13 @@ struct Event: Decodable, Identifiable, Hashable {
     let ms: Double?
     let turns: Int?
     let suggest: Suggest?
+    let toolUseId: String?
 
     var id: Int { seq }
 
     enum CodingKeys: String, CodingKey {
         case kind, seq, t, text, toolId = "id", name, summary, input, error, requestId, tool, canAlways, reason
-        case questions, plan, decision, ok, aborted, cost, ms, turns, suggest
+        case questions, plan, decision, ok, aborted, cost, ms, turns, suggest, toolUseId
     }
 }
 

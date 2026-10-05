@@ -554,6 +554,6 @@ struct CodeBlock: View {
                 .padding(9)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
     }
 }

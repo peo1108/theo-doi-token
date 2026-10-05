@@ -44,7 +44,7 @@ function onUser(text) {
       say(ok ? `allowed ${JSON.stringify(resp.updatedInput.answers || null)} perms=${(resp.updatedPermissions || []).length}` : 'denied');
       result();
     });
-    out({ type: 'control_request', request_id: rid, request: { subtype: 'can_use_tool', tool_name: tool, input, permission_suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] } });
+    out({ type: 'control_request', request_id: rid, request: { subtype: 'can_use_tool', tool_name: tool, input, tool_use_id: id, permission_suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] } });
   } else if (text.includes('LIMIT')) {
     out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1900000000, rateLimitType: 'five_hour', unifiedWindows: { five_hour: { utilization: 1, resetsAt: 1900000000 }, seven_day: { utilization: 0.5 } } } });
     result({ is_error: true, subtype: 'error', result: 'Claude AI usage limit reached' });

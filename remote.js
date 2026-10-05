@@ -587,7 +587,7 @@ class Session {
     this.pending.set(p.requestId, p);
     const ev = {
       kind: 'permission', requestId: p.requestId, tool: p.tool, summary: toolSummary(p.tool, p.input),
-      input: clip(JSON.stringify(p.input, null, 1), 6000), canAlways: p.suggestions.length > 0,
+      input: clip(JSON.stringify(p.input, null, 1), 6000), canAlways: p.suggestions.length > 0, toolUseId: r.tool_use_id || null,
       reason: r.decision_reason || r.description || '',
     };
     if (p.tool === 'AskUserQuestion' && Array.isArray(p.input.questions)) {

@@ -23,8 +23,12 @@ final class SessionModel {
     init(id: String) { self.id = id }
 
     /// Sự kiện hiện trên màn hình (kết quả tool và quyết định được gộp vào thẻ tương ứng).
+    /// Tool đã có thẻ duyệt quyền riêng (câu hỏi, kế hoạch, lệnh chờ duyệt) thì không hiện thêm dòng tool.
     var visible: [Event] {
-        events.filter { $0.kind != "tool_result" && $0.kind != "decided" }
+        let asked = Set(events.compactMap { $0.kind == "permission" ? $0.toolUseId : nil })
+        return events.filter {
+            $0.kind != "tool_result" && $0.kind != "decided" && !($0.kind == "tool" && asked.contains($0.toolId ?? ""))
+        }
     }
 
     var status: String { summary?.status ?? "off" }
