@@ -10,3 +10,6 @@ ios/CCRemote/Info.plist
 
 # thông tin VPS (mật khẩu) — không bao giờ commit
 vps.txt
+
+# bản app iOS tải từ release (cài bằng ESign)
+*.ipa
