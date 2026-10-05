@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>CC Remote Hub</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #fcfcfb; --card: #f0f0ef; --tile: #e5e5e4; --raised: #ffffff;
+    --text: #0b0b0b; --muted: #77756f; --line: rgba(11,11,11,.08); --border: rgba(11,11,11,.10);
+    --accent: #2566d0; --accent-soft: rgba(109,167,236,.18); --focus: #9dbdf0;
+    --good: #2f7d4f; --warn: #a86a00; --bad: #b8492c;
+    --good-bg: rgba(47,125,79,.12); --warn-bg: rgba(237,161,0,.16); --bad-bg: rgba(184,73,44,.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #141413; --card: #1e1e1d; --tile: #2a2a28; --raised: #2f2f2c;
+      --text: #f4f3ee; --muted: #a3a29b; --line: rgba(255,255,255,.08); --border: rgba(255,255,255,.12);
+      --accent: #6da7ec; --accent-soft: rgba(109,167,236,.16); --focus: #3987e5;
+      --good: #5bb57f; --warn: #e0a73a; --bad: #e3826a;
+      --good-bg: rgba(91,181,127,.14); --warn-bg: rgba(224,167,58,.14); --bad-bg: rgba(227,130,106,.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text);
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 28px 16px 48px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
+  h1 small { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 8px; letter-spacing: 0; }
+  h2 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; }
+  .card { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .grid .card { margin: 0; }
+  @media (max-width: 720px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  button, .btn {
+    font: inherit; font-size: 13px; color: var(--text); background: var(--raised); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 12px; cursor: pointer; white-space: nowrap; text-decoration: none; display: inline-block;
+  }
+  button:hover, .btn:hover { border-color: var(--focus); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.danger { color: var(--bad); }
+  button:disabled { opacity: .55; cursor: default; }
+  input {
+    font: inherit; font-size: 14px; color: var(--text); background: var(--raised); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; outline: none; width: 100%; min-width: 0;
+  }
+  input:focus, button:focus-visible { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .field { margin-bottom: 10px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row > .grow { flex: 1 1 160px; }
+  .tabs { display: inline-flex; background: var(--card); border-radius: 9px; padding: 3px; gap: 2px; margin-bottom: 14px; }
+  .tabs button { border: 0; background: transparent; color: var(--muted); padding: 6px 14px; }
+  .tabs button.on { background: var(--raised); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .list { display: grid; gap: 0; }
+  .item { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+  .item:first-child { border-top: 0; }
+  .item .main { flex: 1; min-width: 0; }
+  .item .name { font-weight: 500; overflow-wrap: anywhere; }
+  .item .meta { color: var(--muted); font-size: 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--good); }
+  .badge { display: inline-block; font-size: 11px; font-weight: 600; border-radius: 5px; padding: 1px 6px; margin-left: 6px; background: var(--tile); color: var(--muted); vertical-align: 1px; }
+  .badge.good { background: var(--good-bg); color: var(--good); }
+  .badge.bad { background: var(--bad-bg); color: var(--bad); }
+  .badge.accent { background: var(--accent-soft); color: var(--accent); }
+  .empty { color: var(--muted); font-size: 13px; padding: 6px 0; }
+  .msg { font-size: 12.5px; min-height: 18px; margin-top: 8px; }
+  .msg.ok { color: var(--good); } .msg.err { color: var(--bad); }
+  .creds { background: var(--good-bg); border-radius: 9px; padding: 10px 12px; margin-top: 10px; font-size: 13px; }
+  .creds code { font: 600 13px ui-monospace, SFMono-Regular, Consolas, monospace; user-select: all; }
+  ol { margin: 0; padding-left: 18px; } ol li { margin: 4px 0; color: var(--muted); } ol b { color: var(--text); font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-size: 11.5px; font-weight: 500; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  td.num { text-align: right; } th.num { text-align: right; }
+  td.act { text-align: right; white-space: nowrap; }
+  td.act button { padding: 4px 9px; font-size: 12px; margin-left: 4px; }
+  tbody tr:last-child td { border-bottom: 0; }
+  @media (max-width: 720px) {
+    thead { display: none; }
+    table, tbody, tr, td { display: block; width: 100%; }
+    tr { border-bottom: 1px solid var(--line); padding: 8px 0; }
+    td { border: 0; padding: 3px 0; }
+    td.num, td.act { text-align: left; }
+    td[data-l]::before { content: attr(data-l) ": "; color: var(--muted); }
+    td.act button { margin: 4px 4px 0 0; }
+  }
+  a { color: var(--accent); }
+  .login { max-width: 380px; margin: 9vh auto 0; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- đăng nhập -->
+  <section id="loginView" class="login hidden">
+    <h1 style="margin-bottom:6px">CC Remote Hub</h1>
+    <p class="sub">Điều khiển Claude Code trên máy tính từ điện thoại. Đăng nhập bằng tài khoản admin cấp cho bạn.</p>
+    <form class="card" id="loginForm" autocomplete="on">
+      <div class="field"><label for="lu">Tên đăng nhập</label><input id="lu" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
+      <div class="field"><label for="lp">Mật khẩu</label><input id="lp" name="password" type="password" autocomplete="current-password" required></div>
+      <button class="primary" type="submit" style="width:100%;padding:9px">Đăng nhập</button>
+      <div class="msg err" id="loginMsg"></div>
+    </form>
+  </section>
+
+  <!-- sau khi đăng nhập -->
+  <section id="appView" class="hidden">
+    <header>
+      <h1>CC Remote Hub<small id="who"></small></h1>
+      <div class="row"><button id="logoutBtn">Đăng xuất</button></div>
+    </header>
+    <div class="tabs" id="tabs">
+      <button data-tab="mine" class="on">Của tôi</button>
+      <button data-tab="admin" id="adminTab" class="hidden">Quản trị</button>
+    </div>
+
+    <div id="tab-mine">
+      <div class="card">
+        <h2>Bắt đầu</h2>
+        <p class="sub">Một tài khoản dùng cho cả máy tính lẫn điện thoại — cùng tài khoản thì điện thoại thấy máy tính.</p>
+        <ol>
+          <li><b>Máy tính:</b> mở dashboard Theo dõi token (<code>http://127.0.0.1:7788</code>) → thẻ <b>Điện thoại</b> → <b>Kết nối hub</b>, nhập tên và mật khẩu này.</li>
+          <li><b>iPhone:</b> cài app <b>CC Remote</b>, đăng nhập cùng tài khoản. Máy tính hiện ra ở đầu màn hình chính.</li>
+          <li><b>Thông báo khi app đóng:</b> cài app ntfy rồi bấm <a id="ntfyLink" href="#">đăng ký thông báo</a> trên điện thoại.</li>
+        </ol>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h2>Máy tính</h2>
+          <p class="sub">PC đã kết nối hub bằng tài khoản này.</p>
+          <div class="list" id="machines"></div>
+        </div>
+        <div class="card">
+          <h2>Thiết bị đã đăng nhập</h2>
+          <p class="sub">Điện thoại và trình duyệt. Mất máy thì thu hồi ở đây.</p>
+          <div class="list" id="devices"></div>
+        </div>
+        <form class="card" id="pwForm">
+          <h2>Đổi mật khẩu</h2>
+          <p class="sub">Đổi mật khẩu không đăng xuất các thiết bị đang dùng.</p>
+          <div class="field"><label for="po">Mật khẩu hiện tại</label><input id="po" type="password" autocomplete="current-password" required></div>
+          <div class="field"><label for="pn">Mật khẩu mới (tối thiểu 8 ký tự)</label><input id="pn" type="password" autocomplete="new-password" minlength="8" required></div>
+          <div class="field"><label for="pc">Nhập lại mật khẩu mới</label><input id="pc" type="password" autocomplete="new-password" minlength="8" required></div>
+          <button class="primary" type="submit">Đổi mật khẩu</button>
+          <div class="msg" id="pwMsg"></div>
+        </form>
+        <div class="card">
+          <h2>Đăng xuất mọi nơi</h2>
+          <p class="sub">Thu hồi đăng nhập trên mọi điện thoại và trình duyệt (kể cả trình duyệt này). Máy tính đã kết nối không bị ảnh hưởng.</p>
+          <button class="danger" id="logoutAllBtn">Đăng xuất mọi nơi</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-admin" class="hidden">
+      <form class="card" id="createForm" autocomplete="off">
+        <h2>Tạo tài khoản</h2>
+        <p class="sub">Gửi tên và mật khẩu cho người dùng; họ đăng nhập rồi tự đổi mật khẩu ở tab "Của tôi".</p>
+        <div class="row">
+          <div class="grow"><label for="cu">Tên đăng nhập</label><input id="cu" autocapitalize="none" spellcheck="false" placeholder="chữ không dấu, số, _ . -" required></div>
+          <div class="grow"><label for="cp">Mật khẩu ban đầu</label><input id="cp" spellcheck="false" minlength="8" required></div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button type="button" id="genPw">Tạo mật khẩu ngẫu nhiên</button>
+          <button class="primary" type="submit">Tạo tài khoản</button>
+        </div>
+        <div class="msg" id="createMsg"></div>
+        <div class="creds hidden" id="creds"></div>
+      </form>
+      <div class="card">
+        <h2>Người dùng</h2>
+        <p class="sub">Khoá: cắt mọi kết nối ngay và không đăng nhập được nữa. Đặt lại mật khẩu: không đá các máy đang dùng.</p>
+        <table>
+          <thead><tr><th>Tài khoản</th><th class="num">Máy</th><th class="num">Thiết bị</th><th>Hoạt động gần nhất</th><th></th></tr></thead>
+          <tbody id="users"></tbody>
+        </table>
+        <div class="msg" id="usersMsg"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ago = (t) => {
+  if (!t) return '—';
+  const s = (Date.now() - t) / 1000;
+  if (s < 90) return 'vừa xong';
+  if (s < 3600) return `${Math.round(s / 60)} phút trước`;
+  if (s < 86400) return `${Math.round(s / 3600)} giờ trước`;
+  return new Date(t).toLocaleDateString('vi-VN');
+};
+const say = (el, kind, text) => { el.className = 'msg ' + (kind || ''); el.textContent = text || ''; };
+
+async function api(method, path, body) {
+  const r = await fetch(path, {
+    method, credentials: 'same-origin', cache: 'no-store',
+    headers: { 'X-CC-Web': '1', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let data = null;
+  try { data = await r.json(); } catch {}
+  if (r.status === 401 && path !== '/v1/web/login') { showLogin(); throw new Error('Phiên đăng nhập đã hết'); }
+  if (!r.ok) throw new Error((data && data.message) || `Lỗi ${r.status}`);
+  return data;
+}
+
+let ME = null;
+
+function showLogin() {
+  ME = null;
+  $('appView').classList.add('hidden');
+  $('loginView').classList.remove('hidden');
+  $('lu').focus();
+}
+
+async function load() {
+  try { ME = await api('GET', '/v1/web/me'); } catch { return; }
+  $('loginView').classList.add('hidden');
+  $('appView').classList.remove('hidden');
+  $('who').textContent = `${ME.user.username}${ME.user.admin ? ' · admin' : ''}`;
+  $('adminTab').classList.toggle('hidden', !ME.user.admin);
+  $('ntfyLink').href = ME.ntfy.subscribe;
+  $('machines').innerHTML = ME.machines.length ? ME.machines.map((m) => `
+    <div class="item"><span class="dot ${m.online ? 'on' : ''}"></span>
+      <div class="main"><div class="name">${esc(m.name)}</div><div class="meta">${m.online ? 'Đang kết nối' : 'Tắt · ' + ago(m.lastSeen)}</div></div>
+      <button data-act="rename" data-id="${esc(m.id)}" data-name="${esc(m.name)}">Đổi tên</button>
+      <button class="danger" data-act="unpair" data-id="${esc(m.id)}" data-name="${esc(m.name)}">Ngắt</button></div>`).join('')
+    : '<div class="empty">Chưa có máy nào — kết nối từ dashboard trên máy tính (bước 1 ở trên).</div>';
+  $('devices').innerHTML = ME.devices.map((d) => `
+    <div class="item"><div class="main"><div class="name">${esc(d.name)}${d.current ? '<span class="badge accent">đang dùng</span>' : ''}</div>
+      <div class="meta">dùng lần cuối ${ago(d.lastSeen)}</div></div>
+      ${d.current ? '' : `<button class="danger" data-act="revoke" data-id="${esc(d.id)}" data-name="${esc(d.name)}">Thu hồi</button>`}</div>`).join('')
+    || '<div class="empty">Chưa có thiết bị nào.</div>';
+  if (ME.user.admin && !$('tab-admin').classList.contains('hidden')) loadUsers();
+}
+
+async function loadUsers() {
+  let list;
+  try { list = await api('GET', '/v1/admin/users'); } catch (e) { say($('usersMsg'), 'err', e.message); return; }
+  $('users').innerHTML = list.map((u) => {
+    const self = u.id === ME.user.id;
+    return `<tr>
+      <td><span class="dot ${u.online ? 'on' : ''}" style="display:inline-block;margin-right:6px"></span><b>${esc(u.username)}</b>
+        ${u.admin ? '<span class="badge accent">admin</span>' : ''}${u.locked ? '<span class="badge bad">đã khoá</span>' : ''}</td>
+      <td class="num" data-l="Máy">${u.machines}</td>
+      <td class="num" data-l="Thiết bị">${u.devices}</td>
+      <td data-l="Hoạt động">${ago(u.lastSeen)}</td>
+      <td class="act">
+        <button data-act="reset" data-id="${u.id}" data-name="${esc(u.username)}">Đặt lại mật khẩu</button>
+        ${self ? '' : u.locked ? `<button data-act="unlock" data-id="${u.id}" data-name="${esc(u.username)}">Mở khoá</button>`
+                              : `<button data-act="lock" data-id="${u.id}" data-name="${esc(u.username)}">Khoá</button>`}
+        ${self ? '' : `<button class="danger" data-act="delete" data-id="${u.id}" data-name="${esc(u.username)}">Xoá</button>`}
+      </td></tr>`;
+  }).join('');
+}
+
+function randomPassword() {
+  const a = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const b = new Uint8Array(14);
+  crypto.getRandomValues(b);
+  return [...b].map((x) => a[x % a.length]).join('');
+}
+
+// ---------- sự kiện ----------
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  say($('loginMsg'), 'err', '');
+  try {
+    await api('POST', '/v1/web/login', { username: $('lu').value.trim(), password: $('lp').value });
+    $('lp').value = '';
+    await load();
+  } catch (err) { say($('loginMsg'), 'err', err.message); }
+});
+
+$('logoutBtn').addEventListener('click', async () => { try { await api('POST', '/v1/web/logout'); } catch {} showLogin(); });
+$('logoutAllBtn').addEventListener('click', async () => {
+  if (!confirm('Đăng xuất trên mọi điện thoại và trình duyệt? Bạn sẽ phải đăng nhập lại.')) return;
+  try { await api('POST', '/v1/web/logout-all'); } catch {} showLogin();
+});
+
+$('tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-tab]');
+  if (!b) return;
+  for (const x of $('tabs').querySelectorAll('button')) x.classList.toggle('on', x === b);
+  $('tab-mine').classList.toggle('hidden', b.dataset.tab !== 'mine');
+  $('tab-admin').classList.toggle('hidden', b.dataset.tab !== 'admin');
+  if (b.dataset.tab === 'admin') loadUsers();
+});
+
+$('pwForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if ($('pn').value !== $('pc').value) return say($('pwMsg'), 'err', 'Hai lần nhập mật khẩu mới không khớp');
+  try {
+    await api('POST', '/v1/web/password', { old: $('po').value, new: $('pn').value });
+    $('pwForm').reset();
+    say($('pwMsg'), 'ok', 'Đã đổi mật khẩu');
+  } catch (err) { say($('pwMsg'), 'err', err.message); }
+});
+
+$('genPw').addEventListener('click', () => { $('cp').value = randomPassword(); });
+
+$('createForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  say($('createMsg'), '', '');
+  const username = $('cu').value.trim(), password = $('cp').value;
+  try {
+    const u = await api('POST', '/v1/admin/users', { username, password });
+    $('creds').innerHTML = `Đã tạo <b>${esc(u.username)}</b>. Gửi cho người dùng:<br>Hub: <code>${esc(location.origin)}</code><br>
+      Tên: <code>${esc(u.username)}</code> · Mật khẩu: <code>${esc(password)}</code>`;
+    $('creds').classList.remove('hidden');
+    $('createForm').reset();
+    loadUsers();
+  } catch (err) { say($('createMsg'), 'err', err.message); }
+});
+
+// nút trong danh sách máy / thiết bị / người dùng
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const { act, id, name } = b.dataset;
+  const msgEl = $('tab-admin').contains(b) ? $('usersMsg') : null;
+  try {
+    if (act === 'rename') {
+      const n = prompt('Tên mới cho máy', name);
+      if (!n || !n.trim()) return;
+      await api('POST', '/v1/web/machines/rename', { id, name: n.trim() });
+    } else if (act === 'unpair') {
+      if (!confirm(`Ngắt máy "${name}" khỏi hub? Muốn dùng lại phải kết nối lại từ dashboard trên máy đó.`)) return;
+      await api('POST', '/v1/web/machines/revoke', { id });
+    } else if (act === 'revoke') {
+      if (!confirm(`Thu hồi đăng nhập trên "${name}"?`)) return;
+      await api('POST', '/v1/web/devices/revoke', { id });
+    } else if (act === 'reset') {
+      const pw = prompt(`Mật khẩu mới cho ${name} (tối thiểu 8 ký tự)`, randomPassword());
+      if (!pw) return;
+      await api('POST', `/v1/admin/users/${id}/password`, { password: pw });
+      if (msgEl) say(msgEl, 'ok', `Đã đặt lại mật khẩu cho ${name}: ${pw}`);
+    } else if (act === 'lock') {
+      if (!confirm(`Khoá ${name}? Mọi kết nối của họ bị cắt ngay.`)) return;
+      await api('POST', `/v1/admin/users/${id}/lock`);
+      if (msgEl) say(msgEl, 'ok', `Đã khoá ${name}`);
+    } else if (act === 'unlock') {
+      await api('POST', `/v1/admin/users/${id}/unlock`);
+      if (msgEl) say(msgEl, 'ok', `Đã mở khoá ${name}`);
+    } else if (act === 'delete') {
+      if (!confirm(`Xoá hẳn tài khoản ${name} (cả máy và thiết bị của họ)? Không hoàn tác được.`)) return;
+      await api('POST', `/v1/admin/users/${id}/delete`);
+      if (msgEl) say(msgEl, 'ok', `Đã xoá ${name}`);
+    }
+    await load();
+    if (msgEl) loadUsers();
+  } catch (err) {
+    if (msgEl) say(msgEl, 'err', err.message); else alert(err.message);
+  }
+});
+
+load().then(() => { if (!ME) showLogin(); });
+setInterval(() => { if (ME && !document.hidden) load(); }, 15000);
+</script>
+</body>
+</html>

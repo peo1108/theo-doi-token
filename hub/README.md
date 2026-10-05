@@ -1,7 +1,7 @@
 # CC Remote Hub
 
-Trạm trung chuyển trên VPS giữa app iOS **CC Remote** và tracker trên PC của từng người. Điện thoại chỉ cần internet
-(không cần Tailscale), nhiều người dùng tách biệt nhau, đăng nhập một lần dùng mãi. Thiết kế:
+Trạm trung chuyển trên VPS giữa app iOS **CC Remote** và tracker trên PC của từng người. Điện thoại chỉ cần internet,
+nhiều người dùng tách biệt nhau, đăng nhập một lần dùng mãi. Mở tên miền của hub trên trình duyệt là trang quản trị. Thiết kế:
 [`docs/superpowers/specs/2026-10-05-cc-remote-hub-design.md`](../docs/superpowers/specs/2026-10-05-cc-remote-hub-design.md).
 
 Hub **không lưu nội dung phiên** (tin nhắn, code, ảnh): chỉ chuyển giữa app và PC cùng tài khoản. Trong DB chỉ có tài
@@ -23,15 +23,18 @@ sudo -u cchub HUB_DATA=/var/lib/cc-hub node hub/hub.js init <tên>   # tài kho�
 Nên thêm khoá SSH vào `/root/.ssh/authorized_keys` **trước** khi chạy: script sẽ tắt đăng nhập bằng mật khẩu. Chưa có
 khoá thì script giữ mật khẩu và nhắc đổi (`passwd`).
 
-## Mời bạn bè
+## Tạo tài khoản (trang web)
 
-```bash
-sudo -u cchub HUB_DATA=/var/lib/cc-hub node hub/hub.js invite    # in mã kiểu ABCD-EFGH, dùng một lần, 24 giờ
-```
+Mở `https://<tên miền>`, đăng nhập admin → tab **Quản trị** → **Tạo tài khoản** (tên + mật khẩu ban đầu, có nút tạo
+mật khẩu ngẫu nhiên), gửi cho người dùng. Cũng ở đó: **Đặt lại mật khẩu** (không đá máy đang dùng), **Khoá** (cắt mọi
+kết nối ngay), **Mở khoá**, **Xoá**.
 
-Bạn bè mở app → **Có mã mời** → nhập mã, tự đặt tên + mật khẩu (admin không biết mật khẩu của họ).
+Mỗi người dùng đăng nhập trang web để: đổi mật khẩu, xem PC (online / tắt, đổi tên, ngắt), xem và thu hồi thiết bị đã
+đăng nhập, đăng ký thông báo ntfy, đăng xuất mọi nơi. Đăng nhập web dùng cookie `HttpOnly; Secure; SameSite=Strict`,
+không tự hết hạn.
 
-Quản lý: `users`, `lock <tên>`, `unlock <tên>`, `delete <tên>` (khoá / xoá có hiệu lực trong ≤ 30 giây).
+Dòng lệnh vẫn còn khi cần: `sudo -u cchub HUB_DATA=/var/lib/cc-hub node hub/hub.js users|lock|unlock|delete <tên>`
+(khoá / xoá bằng dòng lệnh có hiệu lực trong ≤ 30 giây; trên web thì ngay lập tức).
 
 ## Ghép PC
 

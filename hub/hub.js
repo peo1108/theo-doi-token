@@ -2,7 +2,7 @@
 // CC Remote Hub (chạy trên VPS, sau Caddy): trung chuyển giữa app iOS và PC của từng người dùng.
 //
 //   node hub/hub.js init <tên> [mật khẩu]   -> tạo tài khoản admin đầu tiên
-//   node hub/hub.js invite                  -> in mã mời (dùng một lần, 24 giờ)
+//   node hub/hub.js invite                  -> in mã mời (dùng một lần, 24 giờ) — thường dùng trang web để tạo tài khoản
 //   node hub/hub.js users                   -> liệt kê người dùng
 //   node hub/hub.js lock|unlock|delete <tên>
 //   node hub/hub.js serve                   -> chạy server (HUB_PORT=7790, HUB_HOST=127.0.0.1, HUB_DATA=hub/data)
@@ -16,6 +16,7 @@ const { openDb } = require('./db.js');
 const auth = require('./auth.js');
 const proto = require('./proto.js');
 const { createRouter } = require('./router.js');
+const { createWeb } = require('./web.js');
 
 const INVITE_TTL = 24 * 3600e3;
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -122,11 +123,13 @@ function createHubServer({ dataDir = process.env.HUB_DATA || path.join(__dirname
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(data));
   };
+  const web = createWeb({ db, router, checkLogin, HubError, readJson, clientIp });
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     try {
       if (req.method === 'GET' && url.pathname === '/v1/health') return send(res, 200, { ok: true, proto: proto.PROTO });
+      if (await web.handle(req, res, url)) return;   // trang web + /v1/web/* + /v1/admin/*
       const fn = routes[`${req.method} ${url.pathname}`];
       if (!fn) return send(res, 404, { error: 'NOT_FOUND', message: 'Không có' });
       return send(res, 200, await fn(await readJson(req), clientIp(req), req));

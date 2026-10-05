@@ -15,7 +15,7 @@ Chỉ cần Node.js, không cài thêm gói nào.
 Gỡ: chạy `autostart.ps1 -Uninstall`, chuột phải icon khay → Thoát, rồi xoá thư mục. Nếu đã dùng tính năng nhiều tài khoản,
 xoá thêm `%USERPROFILE%\.claude\account-profiles\` (chứa token đăng nhập đã lưu).
 
-**Riêng tư:** mọi số liệu nằm trên máy bạn (`data/`). Dashboard chỉ nghe ở 127.0.0.1 (server cho điện thoại cũng vậy, ra ngoài qua Tailscale). Kết nối ra ngoài duy nhất là hỏi
+**Riêng tư:** mọi số liệu nằm trên máy bạn (`data/`). Dashboard chỉ nghe ở 127.0.0.1; điện thoại đi qua hub trên VPS (PC chủ động kết nối ra, không mở cổng). Kết nối ra ngoài duy nhất là hỏi
 hạn mức 5h/tuần ở `api.anthropic.com` bằng chính token Claude Code của bạn (giống lệnh `/usage`).
 
 ## Chạy
@@ -45,9 +45,12 @@ Nháy đúp để mở dashboard.
 | `dashboard.html` | giao diện |
 | `models.json` | bảng giá & màu từng model — sửa ở đây khi giá đổi hoặc có model mới |
 | `accounts.js` | hồ sơ tài khoản, đổi đăng nhập, dòng thời gian đổi (lõi của `cc-switch` và API `/api/accounts`) |
-| `remote.js` | điều khiển từ điện thoại: phiên Claude, ghép thiết bị, ntfy (xem [Điện thoại](#điện-thoại-cc-remote)) |
+| `remote.js` | điều khiển từ điện thoại: phiên Claude, hook VS Code (xem [Điện thoại](#điện-thoại-cc-remote)) |
+| `hub-link.js` | PC kết nối ra hub trên VPS |
+| `hub/` | hub trên VPS: tài khoản, trang web quản trị, trung chuyển app ⇄ PC (xem [hub/README.md](hub/README.md)) |
 | `ios/` | app iOS CC Remote (SwiftUI, build bằng GitHub Actions) |
-| `data/remote.json` | thiết bị đã ghép (token dạng băm), mã ghép, topic ntfy |
+| `data/remote.json` | khoá hook VS Code, chế độ luôn sẵn sàng |
+| `data/hub.json` | địa chỉ hub + khoá máy (không lưu mật khẩu) |
 | `cc-switch.cmd` | lệnh đổi tài khoản trong terminal |
 | `tray.ps1`, `autostart.ps1`, `start.bat` | icon khay & tự chạy |
 | `tray-ui.ps1` | giao diện menu khay (dot-source từ `tray.ps1`) |
@@ -149,29 +152,27 @@ lỗi thì hook cho qua ngay (~80 ms), không bao giờ chặn. Sau khi cập nh
 
 ### Cài đặt (một lần)
 
-1. **Tailscale** (miễn phí): cài trên máy tính (`winget install tailscale.tailscale`) và iPhone (App Store), đăng nhập
-   cùng một tài khoản.
-2. **App iOS**: tải `CCRemote-unsigned.ipa` ở release
-   [`ios-latest`](https://github.com/peo1108/theo-doi-token/releases/tag/ios-latest), ký và cài bằng ESign.
-3. Mở dashboard → thẻ **Điện thoại**:
-   - bấm **Mở cho điện thoại** (tương đương `tailscale serve --bg 7789`; lần đầu Tailscale có thể yêu cầu bật HTTPS
-     cho tailnet theo đường link nó in ra), rồi chép địa chỉ `https://<máy>.<tailnet>.ts.net`;
-   - bấm **Tạo mã ghép** (hoặc `node remote.js pair`), nhập địa chỉ + mã 6 số vào app.
-4. Tuỳ chọn, **thông báo khi app đóng**: cài app **ntfy**, đặt một topic bí mật (dashboard hoặc Cài đặt trong app) và
-   đăng ký đúng topic đó trong ntfy. Máy tính sẽ báo khi Claude xin quyền, hỏi bạn, hết hạn mức hoặc xong việc mà app
-   không mở. Chỉ gửi tiêu đề ngắn qua ntfy.sh, không gửi code.
+1. **Tài khoản hub**: admin mở trang web của hub (`https://clauderc.caesarvn.xyz`) → tab **Quản trị** → **Tạo tài khoản**,
+   gửi tên + mật khẩu cho người dùng. Người dùng đăng nhập trang đó để đổi mật khẩu, xem máy / thiết bị, thu hồi khi mất máy.
+2. **Máy tính**: dashboard → thẻ **Điện thoại** → **Kết nối hub**, nhập tên + mật khẩu (chỉ dùng một lần để lấy khoá máy).
+3. **App iOS**: tải `CCRemote-unsigned.ipa` ở release
+   [`ios-latest`](https://github.com/peo1108/theo-doi-token/releases/tag/ios-latest), ký và cài bằng ESign, đăng nhập
+   cùng tài khoản. Cùng tài khoản thì điện thoại thấy máy tính.
+4. Tuỳ chọn, **thông báo khi app đóng**: cài app **ntfy**, trên trang web của hub (hoặc Cài đặt trong app) bấm đăng ký
+   thông báo — hub tự cấp topic riêng cho tài khoản. Chỉ gửi tiêu đề ngắn qua ntfy.sh, không gửi code.
 
 ### Cách hoạt động
 
-- `tracker.js serve` (khay đã tự chạy) mở thêm server `127.0.0.1:7789` (`REMOTE=0` để tắt, `REMOTE_PORT` để đổi cổng).
-  Server chỉ nghe ở loopback; `tailscale serve` đưa nó ra tailnet với HTTPS, nên chỉ thiết bị của bạn vào được.
-- Mỗi phiên là một tiến trình `claude -p --input-format stream-json --output-format stream-json
+- PC giữ một WebSocket ra hub (`hub-link.js`); app nói chuyện với hub, hub chỉ chuyển tin giữa app và PC **cùng tài khoản**
+  và không lưu nội dung phiên. Chi tiết: [hub/README.md](hub/README.md),
+  [thiết kế](docs/superpowers/specs/2026-10-05-cc-remote-hub-design.md).
+- `tracker.js serve` (khay đã tự chạy) mở thêm server `127.0.0.1:7789` chỉ cho hook của phiên VS Code / terminal
+  (`REMOTE=0` để tắt, `REMOTE_PORT` để đổi cổng).
+- Mỗi phiên mở từ điện thoại là một tiến trình `claude -p --input-format stream-json --output-format stream-json
   --permission-prompt-tool stdio`; xin quyền đi qua `can_use_tool` tới điện thoại. Phiên rảnh 30 phút mà không ai xem
   thì tự tắt, tin nhắn sau sẽ mở lại bằng `--resume` (lịch sử vẫn đủ).
-- Mọi API cần token thiết bị (cấp khi ghép, máy tính chỉ lưu dạng băm trong `data/remote.json`). Mã ghép dùng một lần,
-  hết hạn sau 10 phút, sai 5 lần thì huỷ. Thu hồi thiết bị: nút **Thu hồi** trên dashboard hoặc `node remote.js revoke <id>`.
-- **Đổi tài khoản từ điện thoại** dùng đúng cơ chế `cc-switch`. Phiên mở từ điện thoại được khởi động lại khi rảnh để
-  dùng tài khoản mới; phiên trong terminal/VS Code vẫn như mục [Nhiều tài khoản](#nhiều-tài-khoản).
+- **Đổi tài khoản Claude từ điện thoại** dùng đúng cơ chế `cc-switch`. Phiên mở từ điện thoại được khởi động lại khi rảnh
+  để dùng tài khoản mới; phiên trong terminal/VS Code vẫn như mục [Nhiều tài khoản](#nhiều-tài-khoản).
 - Đừng gửi tin vào cùng một phiên từ cả terminal lẫn điện thoại cùng lúc (hai tiến trình cùng ghi một lịch sử).
 
 **Build app** (không cần Mac): mỗi lần đẩy thay đổi trong `ios/` lên GitHub, workflow `.github/workflows/ios.yml` build

@@ -44,6 +44,13 @@ function openDb(file) {
     userById: (id) => q('SELECT * FROM users WHERE id = ?').get(id),
     users: () => q('SELECT id, username, admin, locked, created_at FROM users ORDER BY id').all(),
     countUsers: () => q('SELECT COUNT(*) AS n FROM users').get().n,
+    // Trang quản trị: số máy / thiết bị và lần hoạt động gần nhất của từng người
+    adminUsers: () => q(`SELECT u.id, u.username, u.admin, u.locked, u.created_at,
+        (SELECT COUNT(*) FROM machines m WHERE m.user_id = u.id) AS machines,
+        (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id) AS devices,
+        MAX(COALESCE((SELECT MAX(last_seen) FROM machines m WHERE m.user_id = u.id), 0),
+            COALESCE((SELECT MAX(last_seen) FROM devices d WHERE d.user_id = u.id), 0)) AS last_seen
+      FROM users u ORDER BY u.id`).all(),
     setLocked: (id, on) => q('UPDATE users SET locked = ? WHERE id = ?').run(on ? 1 : 0, id).changes > 0,
     deleteUser: (id) => q('DELETE FROM users WHERE id = ?').run(id).changes > 0,
     setPassword: (id, hash) => q('UPDATE users SET pass_hash = ? WHERE id = ?').run(hash, id).changes > 0,
