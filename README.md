@@ -14,9 +14,11 @@ Chỉ cần Node.js, không cài thêm gói nào.
 | Bảng trong terminal | `node tracker.js report` |
 | Dòng trạng thái | `node tracker.js status` |
 | Số liệu Prometheus | `node tracker.js metrics` hoặc http://127.0.0.1:7788/metrics |
+| Đổi tài khoản Claude Code | `cc-switch` (thêm thư mục dự án vào PATH) — xem [Nhiều tài khoản](#nhiều-tài-khoản) |
 
 Icon khay: xám = chưa mở cửa sổ 5 giờ · xanh = bình thường · vàng = cao hơn trung bình · đỏ = vượt ngưỡng/ngân sách.
-Nháy đúp để mở dashboard, chuột phải → Thoát để tắt cả server.
+Bấm trái hoặc phải vào icon để mở menu: các dòng Tài khoản (bấm để đổi), Thêm tài khoản, Mở dashboard, Thoát (tắt cả server).
+Nháy đúp để mở dashboard.
 
 ## File
 
@@ -26,10 +28,15 @@ Nháy đúp để mở dashboard, chuột phải → Thoát để tắt cả ser
 | `analytics.js` | phần tính toán dùng chung (giá, cửa sổ 5h, vỡ cache…) cho server và dashboard |
 | `dashboard.html` | giao diện |
 | `models.json` | bảng giá & màu từng model — sửa ở đây khi giá đổi hoặc có model mới |
+| `accounts.js` | hồ sơ tài khoản, đổi đăng nhập, dòng thời gian đổi (lõi của `cc-switch` và API `/api/accounts`) |
+| `cc-switch.cmd` | lệnh đổi tài khoản trong terminal |
 | `tray.ps1`, `autostart.ps1`, `start.bat` | icon khay & tự chạy |
+| `tray-ui.ps1` | giao diện menu khay (dot-source từ `tray.ps1`) |
 | `data/usage.json` | chi tiết 7 ngày + tổng hợp theo ngày 90 ngày (tự tạo) |
 | `data/config.json` | ngân sách & ngưỡng cảnh báo (sửa trên dashboard) |
 | `data/alerts.json` | lịch sử cảnh báo |
+| `data/account-log.json` | dòng thời gian các lần đổi tài khoản (tự tạo) |
+| `~/.claude/account-profiles/` | hồ sơ từng tài khoản + `backup/` (chứa token đăng nhập, xem [Nhiều tài khoản](#nhiều-tài-khoản)) |
 
 ## Cách tính
 
@@ -42,6 +49,9 @@ Nháy đúp để mở dashboard, chuột phải → Thoát để tắt cả ser
 - **Vỡ cache**: lượt phải ghi lại ≥ 50% ngữ cảnh (trừ lượt đầu). Nguyên nhân: ngữ cảnh giảm mạnh → compact;
   nghỉ quá TTL (1h nếu phiên dùng cache 1h, ngược lại 5 phút) → hết hạn; khác model lượt trước → đổi model;
   còn lại → prefix thay đổi (CLAUDE.md, MCP, tool…). "Tốn thêm" = giá ghi − giá đọc của phần bị ghi lại.
+- **Theo tài khoản**: lượt trả lời được gán cho tài khoản theo dòng thời gian các lần đổi (`data/account-log.json`).
+  Lượt của phiên còn chạy lúc đổi có thể bị tính cho tài khoản mới (đánh dấu trên biểu đồ).
+- **% hạn mức** lấy từ cache của Claude Code (`cachedUsageUtilization`), nên tài khoản không dùng chỉ cập nhật tới lần dùng cuối.
 - **Lịch sử**: lần chạy đầu đọc toàn bộ log còn trên máy (Claude Code giữ ~30 ngày) để lấp các ngày cũ; sau đó mỗi
   ngày được chốt khi ra khỏi cửa sổ 7 ngày và giữ 90 ngày.
 
@@ -49,7 +59,33 @@ Nháy đúp để mở dashboard, chuột phải → Thoát để tắt cả ser
 
 Server kiểm tra mỗi phút và gửi thông báo Windows (mỗi loại một lần) khi:
 ngân sách ngày/tuần đạt 80% và 100% · cửa sổ 5h dự kiến vượt N lần trung bình · cache hit 1 giờ qua thấp hơn ngưỡng ·
-một phiên đang chạy có ngữ cảnh vượt ngưỡng (báo lại mỗi khi tăng thêm 100K).
+một phiên đang chạy có ngữ cảnh vượt ngưỡng (báo lại mỗi khi tăng thêm 100K) ·
+hạn mức 5h/tuần của tài khoản đang dùng đạt `alertLimitPct`% (mặc định 90, 0 = tắt; kèm gợi ý tài khoản khác còn nhiều) ·
+đăng nhập của tài khoản sắp hết hạn (< 3 ngày) hoặc đã hết hạn · phát hiện đăng nhập bị ghi đè (conflict) ·
+tài khoản mới xuất hiện sau `/login`.
+
+## Nhiều tài khoản
+
+Đổi qua lại giữa các tài khoản Claude Code (đăng nhập OAuth) mà không phải `/login` lại. Tracker lưu mỗi tài khoản thành
+một hồ sơ và đổi bằng cách ghi đè `claudeAiOauth` trong `.credentials.json` và `oauthAccount` trong `.claude.json`
+(các khoá khác giữ nguyên; luôn sao lưu trước khi ghi).
+
+| Việc | Cách |
+|---|---|
+| Thêm tài khoản | `/login` trong Claude Code → tự xuất hiện (khi tracker đang chạy) |
+| Đổi tên | bấm vào tên trên thẻ Tài khoản của dashboard, hoặc `cc-switch rename <tài khoản> <tên mới>` |
+| Đổi tài khoản | khay (bấm dòng Tài khoản) · nút **Đổi** trên dashboard · `cc-switch <tên\|email\|id>` |
+| Xem / xoá / xử lý xung đột | `cc-switch` · `cc-switch remove <tài khoản>` · `cc-switch keep` |
+
+- **Đổi khi còn phiên đang chạy**: phiên cũ vẫn giữ token cũ và có thể ghi đè lại đăng nhập khi làm mới token. Tracker
+  cảnh báo trước khi đổi; nếu bị ghi đè, dashboard hiện băng cảnh báo với hai nút: **Áp lại** (về tài khoản đã chọn)
+  hoặc **Giữ** (chấp nhận tài khoản đang trong file). Cách chắc nhất: đóng các phiên cũ rồi mới đổi; VS Code cần mở lại phiên.
+- `cc-switch` cần thư mục dự án nằm trong `PATH`. `cc-switch <tên>` khớp chính xác trước, rồi tới tiền tố (mơ hồ → mã thoát 2).
+- Thẻ Tài khoản trên dashboard hiện hạn mức 5h/tuần, hạn đăng nhập và lịch sử đổi; ngưỡng cảnh báo sửa ở "Cài đặt" (`alertLimitPct`).
+- **Bảo mật**: hồ sơ chứa token đăng nhập, nằm cạnh `.credentials.json` trong `~/.claude/account-profiles/`.
+  Không chia sẻ, không đồng bộ lên cloud/git thư mục này. API chỉ nhận trên loopback và không bao giờ trả token.
+- **Khôi phục tay**: `account-profiles/backup/` giữ 5 bản sao lưu gần nhất (cặp `<giờ>-credentials.json` + `<giờ>-claude.json`
+  trước mỗi lần ghi); chép đè lại hai file gốc khi đăng nhập hỏng.
 
 ## Monitoring chuẩn (tuỳ chọn)
 
