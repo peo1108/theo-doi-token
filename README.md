@@ -121,7 +121,9 @@ trên máy tính, điện thoại chỉ gửi lời nhắn và nhận kết qu�
 
 **App làm được:** mở phiên mới ở thư mục dự án bất kỳ · mở lại phiên cũ (kể cả phiên chạy trong terminal) · xem trả lời,
 tool đang chạy, kết quả · **duyệt quyền** (Cho phép / Luôn cho phép / Từ chối), trả lời câu hỏi của Claude, duyệt kế
-hoạch · ngắt · đổi chế độ quyền và model · xem % hạn mức 5h/7 ngày · **hết hạn mức → "Đổi sang X & tiếp tục"** (đổi
+hoạch · ngắt · **cài đặt phiên giống VS Code**: đổi model (danh sách lấy thẳng từ Claude Code), Effort (Low → Max),
+Thinking, Fast mode, tự đổi model khi tin nhắn bị flag, chế độ quyền, output style; áp dụng ngay giữa phiên · gõ `/` để
+chọn lệnh (`/compact`, `/context`, `/review`…) · xem % hạn mức 5h/7 ngày · **hết hạn mức → "Đổi sang X & tiếp tục"** (đổi
 tài khoản, khởi động lại phiên với `--resume` rồi gửi "tiếp tục").
 
 ### Cài đặt (một lần)

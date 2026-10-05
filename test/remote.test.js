@@ -234,3 +234,51 @@ test('recentSessions: lấy tiêu đề AI, bỏ file không phải uuid', () =>
   assert.equal(s.cwd, WORK);
   assert.ok(R.projects().some((p) => p.cwd === WORK));
 });
+
+test('cài đặt phiên: --settings khi mở, apply_flag_settings giữa phiên, capabilities từ initialize', async () => {
+  const CTRL = ARGS_FILE.replace(/\.jsonl$/, '.ctrl.jsonl');
+  const { body } = await api('POST', '/v1/sessions', { cwd: WORK, text: 'xin chào', effort: 'low', thinking: false });
+  const id = body.id;
+  await watch(id, has('result'));
+  const first = JSON.parse(fs.readFileSync(ARGS_FILE, 'utf8').trim().split('\n').pop());
+  assert.deepEqual(JSON.parse(first.args[first.args.indexOf('--settings') + 1]), { effortLevel: 'low', alwaysThinkingEnabled: false });
+  await until(() => hub.get(id, { load: false }).caps);
+  let st = (await api('GET', `/v1/sessions/${id}`)).body;
+  assert.equal(st.account, 'fake@example.com');
+  assert.equal(st.settings.effort, 'low');
+  assert.equal(st.settings.thinking, false);
+
+  const r = await api('POST', `/v1/sessions/${id}/settings`, { effort: 'max', flagSwitch: true, fast: true, model: 'haiku' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.settings.effort, 'max');
+  assert.equal(r.body.settings.modelLabel, 'Haiku 4.5');
+  await until(() => fs.existsSync(CTRL) && fs.readFileSync(CTRL, 'utf8').includes('apply_flag_settings'));
+  const ctrl = fs.readFileSync(CTRL, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(ctrl.find((c) => c.subtype === 'apply_flag_settings').settings, { effortLevel: 'max', switchModelsOnFlag: true, fastMode: true });
+  assert.ok(ctrl.some((c) => c.subtype === 'set_model' && c.model === 'haiku'));
+  assert.equal((await api('POST', `/v1/sessions/${id}/settings`, { effort: 'siêu' })).body.error, 'FORMAT');
+
+  const caps = (await api('GET', '/v1/capabilities')).body;
+  assert.deepEqual(caps.models.map((m) => m.value), ['default', 'haiku']);
+  assert.deepEqual(caps.models[0].efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepEqual(caps.commands.map((c) => c.name), ['compact'], 'ẩn lệnh nội bộ __');
+  assert.deepEqual(caps.outputStyles, ['default', 'Concise']);
+  assert.ok(caps.defaults && 'effort' in caps.defaults);
+
+  // mở lại (resume) vẫn giữ cài đặt của phiên
+  await api('POST', `/v1/sessions/${id}/close`);
+  await until(() => !hub.get(id, { load: false }).proc);
+  await api('POST', `/v1/sessions/${id}/send`, { text: '/context' });
+  const evs = await watch(id, has('output'));
+  assert.equal(evs.find((e) => e.kind === 'output').text, 'Context: 12K / 200K');
+  const again = JSON.parse(fs.readFileSync(ARGS_FILE, 'utf8').trim().split('\n').pop());
+  assert.deepEqual(JSON.parse(again.args[again.args.indexOf('--settings') + 1]), { effortLevel: 'max', alwaysThinkingEnabled: false, switchModelsOnFlag: true, fastMode: true });
+  assert.equal(again.args[again.args.indexOf('--model') + 1], 'haiku');
+});
+
+test('capabilities khi chưa có phiên nào: mở claude chỉ để hỏi initialize', async () => {
+  const hub2 = R.createHub({});
+  const caps = await hub2.capabilities();
+  assert.equal(caps.account.email, 'fake@example.com');
+  assert.equal(caps.models.length, 2);
+});

@@ -36,8 +36,65 @@ struct Rate: Codable, Hashable {
     let sevenDay: Double?
 }
 
+struct SessionSettings: Codable, Hashable {
+    let model: String?
+    let modelValue: String?
+    let modelLabel: String
+    let effort: String?
+    let thinking: Bool
+    let flagSwitch: Bool
+    let fast: Bool
+    let outputStyle: String
+}
+
+struct ModelInfo: Codable, Identifiable, Hashable {
+    var id: String { value }
+    let value: String
+    let label: String
+    let description: String
+    let resolved: String
+    let efforts: [String]
+    let thinking: Bool
+    let fast: Bool
+}
+
+struct CommandInfo: Codable, Identifiable, Hashable {
+    var id: String { name }
+    let name: String
+    let description: String
+    let hint: String
+}
+
+struct CapsAccount: Codable, Hashable {
+    let email: String
+    let plan: String
+}
+
+/// Danh sách model, lệnh /, output style mà Claude Code trên máy hỗ trợ (từ initialize).
+struct Capabilities: Codable {
+    let models: [ModelInfo]
+    let commands: [CommandInfo]
+    let outputStyles: [String]
+    let account: CapsAccount?
+    let efforts: [String]
+    let defaults: SessionSettings
+}
+
+func effortLabel(_ e: String?) -> String {
+    switch e {
+    case "low": return "Low"
+    case "medium": return "Medium"
+    case "high": return "High"
+    case "xhigh": return "XHigh"
+    case "max": return "Max"
+    default: return "Mặc định"
+    }
+}
+
 struct SessionSummary: Codable, Identifiable, Hashable {
     let id: String
+    let settings: SessionSettings?
+    let account: String?
     let cwd: String?
     let project: String?
     let title: String?

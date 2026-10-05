@@ -8,6 +8,9 @@ struct NewSessionView: View {
     @State private var prompt = ""
     @State private var mode = PermissionMode.default
     @State private var model = UserDefaults.standard.string(forKey: "lastModel") ?? ""
+    @State private var effort = ""
+    @State private var thinking = true
+    @State private var touched = false   // đã chỉnh effort/thinking -> gửi kèm, không thì theo settings của máy
     @State private var busy = false
     @State private var error: String?
     @FocusState private var promptFocused: Bool
@@ -56,8 +59,20 @@ struct NewSessionView: View {
                         }
                     }
                     Picker("Model", selection: $model) {
-                        ForEach(modelChoices, id: \.id) { m in Text(m.label).tag(m.id) }
+                        if let caps = app.caps, !caps.models.isEmpty {
+                            Text("Theo máy (\(caps.defaults.modelLabel))").tag("")
+                            ForEach(caps.models.filter { $0.value != "default" }) { m in Text(m.label).tag(m.value) }
+                        } else {
+                            ForEach(modelChoices, id: \.id) { m in Text(m.label).tag(m.id) }
+                        }
                     }
+                    if !efforts.isEmpty {
+                        Picker("Effort", selection: Binding(get: { effort }, set: { effort = $0; touched = true })) {
+                            ForEach(efforts, id: \.self) { Text(effortLabel($0)).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    Toggle("Thinking", isOn: Binding(get: { thinking }, set: { thinking = $0; touched = true }))
                 }
 
                 if let error {
@@ -78,6 +93,11 @@ struct NewSessionView: View {
                 }
             }
             .task {
+                await app.loadCaps()
+                if let d = app.caps?.defaults {
+                    effort = d.effort ?? ""
+                    thinking = d.thinking
+                }
                 do {
                     projects = try await app.projects()
                     if cwd.isEmpty, let first = projects.first { cwd = first.cwd }
@@ -89,11 +109,23 @@ struct NewSessionView: View {
         }
     }
 
+    /// Mức effort của model đang chọn (model rỗng = model mặc định của máy).
+    private var efforts: [String] {
+        guard let caps = app.caps else { return [] }
+        let want = model.isEmpty ? (caps.defaults.modelValue ?? "default") : model
+        return caps.models.first { $0.value == want }?.efforts ?? caps.efforts
+    }
+
     private func start() async {
         busy = true
         error = nil
         do {
-            let s = try await app.createSession(cwd: cwd.trimmingCharacters(in: .whitespaces), text: prompt, mode: mode.rawValue, model: model)
+            var options: [String: Any] = [:]
+            if touched {
+                if !effort.isEmpty { options["effort"] = effort }
+                options["thinking"] = thinking
+            }
+            let s = try await app.createSession(cwd: cwd.trimmingCharacters(in: .whitespaces), text: prompt, mode: mode.rawValue, model: model, options: options)
             UserDefaults.standard.set(cwd, forKey: "lastCwd")
             UserDefaults.standard.set(model, forKey: "lastModel")
             dismiss()

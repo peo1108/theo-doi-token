@@ -88,6 +88,13 @@ jobs:
           xcrun simctl terminate "$UDID" vn.peo.ccremote
           xcrun simctl launch "$UDID" vn.peo.ccremote
           shot 09-home-dark 5
+          xcrun simctl ui "$UDID" appearance light
+          xcrun simctl terminate "$UDID" vn.peo.ccremote || true
+          xcrun simctl launch "$UDID" vn.peo.ccremote -openSession "$(j chat)" -openSettings YES
+          shot 10-settings 5
+          xcrun simctl terminate "$UDID" vn.peo.ccremote || true
+          xcrun simctl launch "$UDID" vn.peo.ccremote -openSession "$(j chat)" -draft "/co"
+          shot 11-commands 5
           cat "$RUNNER_TEMP/server.log"
 
       - name: Upload screenshots

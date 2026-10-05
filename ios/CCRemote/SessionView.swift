@@ -4,7 +4,7 @@ struct SessionView: View {
     @Environment(AppModel.self) private var app
     @State private var model: SessionModel
     @State private var draft = ""
-    @State private var confirmClose = false
+    @State private var showSettings = false
     @FocusState private var inputFocused: Bool
 
     init(id: String) {
@@ -62,22 +62,30 @@ struct SessionView: View {
                     }
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) { menu }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }
+            }
         }
         .task {
             guard let api = app.api else { return }
             await model.run(api: api)
         }
-        .confirmationDialog("Tắt tiến trình Claude của phiên này?", isPresented: $confirmClose, titleVisibility: .visible) {
-            Button("Tắt", role: .destructive) { act { await model.close(api: $0) } }
-        } message: {
-            Text("Lịch sử vẫn giữ. Gửi tin nhắn mới sẽ mở lại phiên.")
+        .task { await app.loadCaps() }
+        .onAppear {
+            // tham số khởi chạy cho kiểm tra trên Simulator: -openSettings YES, -draft "/co"
+            if UserDefaults.standard.bool(forKey: "openSettings") { showSettings = true }
+            if let d = UserDefaults.standard.string(forKey: "draft"), draft.isEmpty { draft = d }
         }
+        .sheet(isPresented: $showSettings) { SessionSettingsView(model: model) }
     }
 
     private var subtitle: String {
         var parts: [String] = [statusInfo(model.status).label]
-        if let p = model.summary?.project, !p.isEmpty { parts.append(p) }
+        if let st = model.summary?.settings {
+            parts.append(st.effort != nil ? "\(st.modelLabel) \(effortLabel(st.effort))" : st.modelLabel)
+        } else if let p = model.summary?.project, !p.isEmpty {
+            parts.append(p)
+        }
         if let r = model.summary?.rate, let h = r.fiveHour { parts.append("5h \(Int(h.rounded()))%") }
         return parts.joined(separator: " · ")
     }
@@ -93,38 +101,35 @@ struct SessionView: View {
         }
     }
 
-    private var menu: some View {
-        Menu {
-            Picker("Quyền", selection: Binding(
-                get: { model.summary?.mode ?? "default" },
-                set: { m in act { await model.setMode(m, api: $0) } }
-            )) {
-                ForEach(PermissionMode.allCases) { m in Label(m.label, systemImage: m.icon).tag(m.rawValue) }
-            }
-            Picker("Model", selection: Binding(
-                get: { model.summary?.model ?? "" },
-                set: { m in act { await model.setModel(m, api: $0) } }
-            )) {
-                ForEach(modelChoices, id: \.id) { m in Text(m.label).tag(m.id) }
-            }
-            if let cwd = model.summary?.cwd {
-                Section(cwd) {}
-            }
-            if model.summary?.live == true {
-                Button("Tắt tiến trình", systemImage: "power", role: .destructive) { confirmClose = true }
-            }
-        } label: {
-            Image(systemName: modeIcon)
-        }
-    }
-
-    private var modeIcon: String {
-        PermissionMode(rawValue: model.summary?.mode ?? "default")?.icon ?? "ellipsis.circle"
+    /// Đang gõ "/lệnh" (chưa có dấu cách) -> phần sau dấu /
+    private var commandQuery: String? {
+        guard draft.hasPrefix("/"), !draft.contains(" "), !draft.contains("\n") else { return nil }
+        return String(draft.dropFirst())
     }
 
     private var composer: some View {
+        VStack(spacing: 0) {
+            if let q = commandQuery, let cmds = app.caps?.commands {
+                CommandSuggestions(commands: cmds, query: q) { c in
+                    draft = "/" + c.name + " "
+                    inputFocused = true
+                }
+                Divider()
+            }
+            composerRow
+        }
+    }
+
+    private var composerRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField("Nhắn cho Claude…", text: $draft, axis: .vertical)
+            Button {
+                if !draft.hasPrefix("/") { draft = "/" + draft }
+                inputFocused = true
+            } label: {
+                Image(systemName: "slash.circle").font(.system(size: 28))
+            }
+            .tint(.secondary)
+            TextField("Nhắn cho Claude…  (/ để xem lệnh)", text: $draft, axis: .vertical)
                 .lineLimit(1...6)
                 .focused($inputFocused)
                 .padding(.horizontal, 14).padding(.vertical, 9)
@@ -195,6 +200,11 @@ struct EventRow: View {
                 .font(.footnote)
                 .foregroundStyle(.red)
                 .textSelection(.enabled)
+        case "output":
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Kết quả lệnh", systemImage: "terminal").font(.caption).foregroundStyle(.secondary)
+                CodeBlock(text: event.text ?? "", tint: event.error == true ? .red : nil)
+            }
         case "note":
             Text(event.text ?? "")
                 .font(.caption)

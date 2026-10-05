@@ -118,6 +118,7 @@ final class SessionModel {
         await post(api, "permission", body)
     }
 
+    func applySettings(_ body: [String: Any], api: APIClient) async { await post(api, "settings", body) }
     func interrupt(api: APIClient) async { await post(api, "interrupt") }
     func setMode(_ mode: String, api: APIClient) async { await post(api, "mode", ["mode": mode]) }
     func setModel(_ model: String, api: APIClient) async { await post(api, "model", ["model": model]) }

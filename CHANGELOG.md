@@ -5,6 +5,8 @@
 - **Điện thoại (CC Remote)**: app iOS điều khiển Claude Code trên máy qua Tailscale — mở/tiếp tục phiên, duyệt quyền,
   trả lời câu hỏi, ngắt, đổi chế độ quyền/model, xem hạn mức; hết hạn mức thì đổi tài khoản rồi chạy tiếp ngay trong
   phiên. Ghép bằng mã 6 số, thông báo khi app đóng qua ntfy (tuỳ chọn). Thẻ Điện thoại trên dashboard.
+- Cài đặt phiên trên điện thoại: model, Effort, Thinking, Fast mode, đổi model khi bị flag, output style (áp dụng ngay
+  giữa phiên, giữ khi mở lại); gợi ý lệnh `/` khi gõ.
 - IPA chưa ký được build tự động bằng GitHub Actions (release `ios-latest`), cài bằng ESign.
 
 ## v1.0.1 — 2026-10-05

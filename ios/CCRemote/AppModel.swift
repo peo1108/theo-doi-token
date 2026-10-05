@@ -12,6 +12,7 @@ final class AppModel {
     var lastError: String?
     var lastOK: Date?
     var path = NavigationPath()
+    var caps: Capabilities?
 
     var isPaired: Bool { token != nil && !baseURL.isEmpty }
 
@@ -75,16 +76,27 @@ final class AppModel {
         }
     }
 
+    /// Model, lệnh /, output style: tải một lần, làm mới sau 10 phút.
+    private var capsAt: Date?
+    func loadCaps(force: Bool = false) async {
+        guard let api else { return }
+        if !force, caps != nil, let at = capsAt, Date().timeIntervalSince(at) < 600 { return }
+        if let c: Capabilities = try? await api.call("GET", "/v1/capabilities") {
+            caps = c
+            capsAt = Date()
+        }
+    }
+
     func projects() async throws -> [Project] {
         guard let api else { return [] }
         return try await api.call("GET", "/v1/projects")
     }
 
-    func createSession(cwd: String, text: String, mode: String, model: String) async throws -> SessionSummary {
+    func createSession(cwd: String, text: String, mode: String, model: String, options: [String: Any] = [:]) async throws -> SessionSummary {
         guard let api else { throw APIError(code: "UNPAIRED", message: "Chưa ghép máy tính") }
-        let s: SessionSummary = try await api.call("POST", "/v1/sessions", body: [
-            "cwd": cwd, "text": text, "mode": mode, "model": model,
-        ])
+        var body: [String: Any] = ["cwd": cwd, "text": text, "mode": mode, "model": model]
+        body.merge(options) { _, new in new }
+        let s: SessionSummary = try await api.call("POST", "/v1/sessions", body: body)
         await refresh()
         return s
     }

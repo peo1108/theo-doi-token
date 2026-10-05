@@ -29,7 +29,10 @@ let n = 0;
 
 function onUser(text) {
   log({ type: 'user', message: { role: 'user', content: text } });
-  if (text.includes('PERM') || text.includes('ASK')) {
+  if (text === '/context') {
+    out({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Context: 12K / 200K</local-command-stdout>' }, parent_tool_use_id: null });
+    result({ total_cost_usd: 0 });
+  } else if (text.includes('PERM') || text.includes('ASK')) {
     const ask = text.includes('ASK');
     const tool = ask ? 'AskUserQuestion' : 'Write';
     const input = ask
@@ -73,7 +76,17 @@ process.stdin.on('data', (d) => {
       waiting.delete(m.response.request_id);
       if (fn) fn(m.response.response);
     } else if (m.type === 'control_request') {
-      out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } });
+      const response = m.request.subtype === 'initialize' ? {
+        models: [
+          { value: 'default', resolvedModel: 'claude-opus-5-5', displayName: 'Default (recommended)', description: 'Opus 5.5', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], supportsAdaptiveThinking: true, supportsFastMode: true },
+          { value: 'haiku', resolvedModel: 'claude-haiku-4-5', displayName: 'Haiku 4.5', description: 'Nhanh' },
+        ],
+        commands: [{ name: 'compact', description: 'Compact', argumentHint: '[hướng dẫn]' }, { name: '__hidden', description: 'x' }],
+        available_output_styles: ['default', 'Concise'],
+        account: { email: 'fake@example.com', subscriptionType: 'Claude Max' },
+      } : {};
+      if (process.env.FAKE_ARGS_FILE && m.request.subtype !== 'initialize') fs.appendFileSync(process.env.FAKE_ARGS_FILE.replace(/\.jsonl$/, '.ctrl.jsonl'), JSON.stringify(m.request) + '\n');
+      out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response } });
       if (m.request.subtype === 'interrupt' && slow) { slow(); slow = null; }
       if (m.request.subtype === 'set_permission_mode') out({ type: 'system', subtype: 'status', permissionMode: m.request.mode });
     }

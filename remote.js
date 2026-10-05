@@ -217,18 +217,26 @@ function normalize(m) {
       }
     }
   } else if (m.type === 'user' && !m.isMeta) {
-    if (typeof content === 'string') {
-      const t = cleanUserText(content);
-      if (t) out.push({ kind: t.startsWith('[Request interrupted') ? 'note' : 'user', text: t.startsWith('[Request interrupted') ? 'Đã ngắt' : t });
-    } else if (Array.isArray(content)) {
+    const first = typeof content === 'string' ? content : Array.isArray(content) && content[0] && content[0].type === 'text' ? content[0].text : '';
+    if (m.isCompactSummary || /^This session is being continued from a previous conversation/.test(first || '')) {
+      out.push({ kind: 'note', text: 'Hội thoại đã được compact' });
+      return out;
+    }
+    const userText = (raw) => {
+      // kết quả lệnh / (vd. /context, /cost) nằm trong local-command-stdout
+      const so = /<local-command-std(out|err)>([\s\S]*?)<\/local-command-std(?:out|err)>/.exec(raw);
+      if (so) { if (so[2].trim()) out.push({ kind: 'output', error: so[1] === 'err', text: clip(so[2].trim(), 6000) }); return; }
+      const t = cleanUserText(raw);
+      if (!t) return;
+      if (t.startsWith('[Request interrupted')) out.push({ kind: 'note', text: 'Đã ngắt' });
+      else out.push({ kind: 'user', text: t });
+    };
+    if (typeof content === 'string') userText(content);
+    else if (Array.isArray(content)) {
       for (const c of content) {
         if (c.type === 'tool_result') out.push({ kind: 'tool_result', id: c.tool_use_id, error: !!c.is_error, text: clip(resultText(c.content), 3000) });
-        else if (c.type === 'text') {
-          const t = cleanUserText(c.text);
-          if (!t) continue;
-          if (t.startsWith('[Request interrupted')) out.push({ kind: 'note', text: 'Đã ngắt' });
-          else out.push({ kind: 'user', text: t });
-        } else if (c.type === 'image') out.push({ kind: 'user', text: '[ảnh]' });
+        else if (c.type === 'text') userText(c.text);
+        else if (c.type === 'image') out.push({ kind: 'user', text: '[ảnh]' });
       }
     }
   }
@@ -347,6 +355,58 @@ function projects(limit = 30) {
 
 // ---------- phiên ----------
 
+// ---------- cài đặt phiên (model, effort, thinking...) ----------
+
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// tên trong app -> khoá settings của Claude Code (truyền bằng --settings, đổi giữa phiên bằng apply_flag_settings)
+const SETTING_KEYS = { effort: 'effortLevel', thinking: 'alwaysThinkingEnabled', flagSwitch: 'switchModelsOnFlag', fast: 'fastMode', outputStyle: 'outputStyle' };
+
+let userSettingsCache = null;
+function userSettings() {
+  const now = Date.now();
+  if (userSettingsCache && now - userSettingsCache.t < 5000) return userSettingsCache.v;
+  let v = {};
+  try { v = JSON.parse(fs.readFileSync(path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'settings.json'), 'utf8')) || {}; } catch {}
+  userSettingsCache = { t: now, v };
+  return v;
+}
+
+// Kiểm tra và giữ lại các tuỳ chọn hợp lệ.
+function checkOpts(o) {
+  const out = {};
+  if (!o || typeof o !== 'object') return out;
+  if (o.effort != null) {
+    if (!EFFORTS.includes(o.effort)) throw new RemoteError('FORMAT', 'Mức effort không hợp lệ');
+    out.effort = o.effort;
+  }
+  for (const k of ['thinking', 'flagSwitch', 'fast']) if (o[k] != null) out[k] = !!o[k];
+  if (o.outputStyle != null) {
+    if (!/^[\w .-]{1,40}$/.test(String(o.outputStyle))) throw new RemoteError('FORMAT', 'Output style không hợp lệ');
+    out.outputStyle = String(o.outputStyle);
+  }
+  return out;
+}
+
+const toFlagSettings = (opts) => Object.fromEntries(Object.entries(opts).map(([k, v]) => [SETTING_KEYS[k], v]));
+
+// Phần cần dùng trong phản hồi initialize của Claude Code.
+function pickCaps(x) {
+  x = x || {};
+  return {
+    models: (x.models || []).map((m) => ({
+      value: String(m.value), label: String(m.displayName || m.value), description: String(m.description || ''),
+      resolved: String(m.resolvedModel || m.value), efforts: m.supportsEffort ? (m.supportedEffortLevels || EFFORTS) : [],
+      thinking: !!m.supportsAdaptiveThinking, fast: !!m.supportsFastMode,
+    })),
+    commands: (x.commands || []).filter((c) => c && c.name && !String(c.name).startsWith('__')).map((c) => ({
+      name: String(c.name), description: clip(c.description || '', 200), hint: String(c.argumentHint || ''),
+    })),
+    outputStyles: Array.isArray(x.available_output_styles) ? x.available_output_styles.map(String) : ['default'],
+    account: x.account ? { email: x.account.email || '', plan: x.account.subscriptionType || '' } : null,
+    fetchedAt: Date.now(),
+  };
+}
+
 function killTree(proc) {
   if (!proc || proc.exitCode != null) return;
   if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { windowsHide: true });
@@ -354,8 +414,10 @@ function killTree(proc) {
 }
 
 class Session {
-  constructor(id, { cwd, mode = 'default', model = '', known = false, hub }) {
+  constructor(id, { cwd, mode = 'default', model = '', known = false, hub, opts = {} }) {
     this.id = id;
+    this.opts = checkOpts(opts);   // effort, thinking, flagSwitch, fast, outputStyle (thiếu = theo settings của máy)
+    this.caps = null;
     this.cwd = cwd;
     this.mode = MODES.includes(mode) ? mode : 'default';
     this.model = model || '';
@@ -429,8 +491,26 @@ class Session {
     for (const c of this.clients) c.send(st);
   }
 
+  // Giá trị đang có hiệu lực (tuỳ chọn của phiên, nếu không thì settings.json của máy).
+  effective() {
+    const us = userSettings();
+    const caps = this.caps || this.hub.caps;
+    const want = this.model || us.model || 'default';
+    const info = caps && caps.models.find((m) => m.value === want || m.resolved === want);
+    const perModel = (us.modelSettings && info && us.modelSettings[info.resolved]) || {};
+    return {
+      model: this.model, modelValue: info ? info.value : want, modelLabel: info ? info.label : want === 'default' ? 'Mặc định' : want,
+      effort: this.opts.effort ?? perModel.effortLevel ?? us.effortLevel ?? null,
+      thinking: this.opts.thinking ?? us.alwaysThinkingEnabled ?? true,
+      flagSwitch: this.opts.flagSwitch ?? us.switchModelsOnFlag ?? true,
+      fast: this.opts.fast ?? us.fastMode ?? false,
+      outputStyle: this.opts.outputStyle ?? us.outputStyle ?? 'default',
+    };
+  }
+
   summary() {
     return {
+      settings: this.effective(), account: this.caps && this.caps.account ? this.caps.account.email : null,
       id: this.id, cwd: this.cwd, project: this.cwd ? path.basename(this.cwd) : '', title: this.title,
       status: this.status, live: !!this.proc, pending: this.pending.size, mode: this.mode, model: this.model,
       rate: this.rate, cost: this.cost, lastText: this.lastText, updatedAt: this.updatedAt, epoch: this.epoch,
@@ -455,6 +535,7 @@ class Session {
     const args = [...bin.pre, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--permission-prompt-tool', 'stdio', '--permission-mode', this.mode,
       ...(this.model ? ['--model', this.model] : []),
+      ...(Object.keys(this.opts).length ? ['--settings', JSON.stringify(toFlagSettings(this.opts))] : []),
       ...(this.known ? ['--resume', this.id] : ['--session-id', this.id])];
     const env = { ...process.env };
     for (const k of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT']) delete env[k];
@@ -482,6 +563,8 @@ class Session {
     proc.stdin.on('error', () => {});
     proc.on('error', (err) => { this.store({ kind: 'error', text: `Không chạy được claude: ${err.message}` }); this.onExit(null); });
     proc.on('exit', (code) => this.onExit(code));
+    // hỏi danh sách model, lệnh /, output style, tài khoản đang dùng
+    this.write({ type: 'control_request', request_id: `init-${Date.now()}`, request: { subtype: 'initialize' } });
   }
 
   onExit(code) {
@@ -516,6 +599,11 @@ class Session {
       if (this.status === 'starting') this.setStatus(this.inflight > 0 ? 'running' : 'idle');
       return;
     }
+    if (m.type === 'system' && m.subtype === 'status' && m.status === 'compacting') {
+      this.store({ kind: 'note', text: 'Đang compact hội thoại…' });
+      this.setStatus('running');
+      return;
+    }
     if (m.type === 'system' && m.subtype === 'status' && m.permissionMode && MODES.includes(m.permissionMode)) {
       this.mode = m.permissionMode;
       this.broadcastState();
@@ -541,6 +629,10 @@ class Session {
     }
     if (m.type === 'control_response') {
       const r = m.response || {};
+      if (String(r.request_id || '').startsWith('init-')) {
+        if (r.subtype === 'success') { this.caps = pickCaps(r.response); this.hub.caps = this.caps; this.broadcastState(); }
+        return;
+      }
       if (r.subtype === 'error') this.store({ kind: 'error', text: `Lệnh điều khiển lỗi: ${clip(r.error, 300)}` });
       return;
     }
@@ -661,6 +753,17 @@ class Session {
     this.broadcastState();
   }
 
+  // Đổi nhiều cài đặt một lần: { model, mode, effort, thinking, flagSwitch, fast, outputStyle }
+  applySettings(patch = {}) {
+    const opts = checkOpts(patch);
+    if (patch.model !== undefined) this.setModel(patch.model);
+    if (patch.mode !== undefined) this.setMode(patch.mode);
+    if (!Object.keys(opts).length) return;
+    Object.assign(this.opts, opts);
+    if (this.proc) this.write({ type: 'control_request', request_id: `set-${Date.now()}`, request: { subtype: 'apply_flag_settings', settings: toFlagSettings(opts) } });
+    this.broadcastState();
+  }
+
   close() {
     if (!this.proc) return;
     this.stopping = true;
@@ -678,6 +781,42 @@ class Session {
   }
 }
 
+// Mở claude (không gửi tin nhắn nào, không tốn token) chỉ để lấy phản hồi initialize.
+function probeCaps(timeout = 25e3) {
+  const bin = findClaude();
+  if (!bin) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const env = { ...process.env };
+    for (const k of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT']) delete env[k];
+    let proc;
+    try {
+      proc = spawn(bin.cmd, [...bin.pre, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--no-session-persistence'],
+        { cwd: os.homedir(), env, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+    } catch { return resolve(null); }
+    let buf = '', done = false;
+    const finish = (v) => { if (done) return; done = true; clearTimeout(t); try { proc.stdin.end(); } catch {} setTimeout(() => killTree(proc), 2000).unref(); resolve(v); };
+    const t = setTimeout(() => finish(null), timeout);
+    proc.on('error', () => finish(null));
+    proc.on('exit', () => finish(null));
+    proc.stdin.on('error', () => {});
+    proc.stdout.setEncoding('utf8');
+    proc.stdout.on('data', (d) => {
+      buf += d;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 1);
+        let m;
+        try { m = JSON.parse(line); } catch { continue; }
+        if (m.type === 'control_response' && m.response && m.response.request_id === 'caps') {
+          finish(m.response.subtype === 'success' ? pickCaps(m.response.response) : null);
+        }
+      }
+    });
+    proc.stdin.write(JSON.stringify({ type: 'control_request', request_id: 'caps', request: { subtype: 'initialize' } }) + '\n');
+  });
+}
+
 // ---------- hub: giữ các phiên, nối với tracker ----------
 
 function createHub(ctx = {}) {
@@ -693,8 +832,21 @@ function createHub(ctx = {}) {
     return v;
   };
 
+  let capsPending = null;
   const hub = {
     sessions,
+    caps: null,
+    // Danh sách model / lệnh / output style: lấy từ phiên gần nhất, nếu chưa có thì mở nhanh một tiến trình claude để hỏi.
+    async capabilities() {
+      if (hub.caps && Date.now() - hub.caps.fetchedAt < 30 * MIN) return hub.caps;
+      if (!capsPending) {
+        capsPending = probeCaps().then((c) => { if (c) hub.caps = c; return hub.caps; }).finally(() => { capsPending = null; });
+      }
+      return capsPending;
+    },
+    defaults() {
+      return new Session('00000000-0000-0000-0000-000000000000', { hub }).effective();
+    },
     notify: (title, body, sid) => (ctx.notify || notify)(title, body, sid),
     suggestAccount() {
       const info = accountsInfo();
@@ -712,11 +864,11 @@ function createHub(ctx = {}) {
       if (load) s.loadTranscript();
       return s;
     },
-    create({ cwd, text, mode, model }) {
+    create({ cwd, text, mode, model, ...opts }) {
       cwd = String(cwd || '').trim();
       if (!cwd || !path.isAbsolute(cwd)) throw new RemoteError('NO_CWD', 'Cần đường dẫn thư mục đầy đủ');
       const id = crypto.randomUUID();
-      const s = new Session(id, { cwd: path.resolve(cwd), mode, model, hub });
+      const s = new Session(id, { cwd: path.resolve(cwd), mode, model, hub, opts });
       if (model) s.setModel(model);
       sessions.set(id, s);
       try { s.send(text); } catch (err) { sessions.delete(id); throw err; }
@@ -854,6 +1006,10 @@ function createRemoteServer(hub) {
 
       if (p === '/v1/state' && req.method === 'GET') return send(res, 200, hub.state());
       if (p === '/v1/projects' && req.method === 'GET') return send(res, 200, projects());
+      if (p === '/v1/capabilities' && req.method === 'GET') {
+        const caps = await hub.capabilities();
+        return send(res, 200, { ...(caps || { models: [], commands: [], outputStyles: ['default'], account: null }), efforts: EFFORTS, defaults: hub.defaults() });
+      }
       if (p === '/v1/sessions' && req.method === 'POST') {
         const b = await jsonBody(req);
         return send(res, 200, hub.create(b).summary());
@@ -867,7 +1023,7 @@ function createRemoteServer(hub) {
         return send(res, 200, { ok: await hub.notify('CC Remote', 'Thông báo hoạt động bình thường', null) });
       }
 
-      const m = /^\/v1\/sessions\/([0-9a-f-]{36})(?:\/(events|send|permission|interrupt|mode|model|close))?$/i.exec(p);
+      const m = /^\/v1\/sessions\/([0-9a-f-]{36})(?:\/(events|send|permission|interrupt|mode|model|settings|close))?$/i.exec(p);
       if (!m) return send(res, 404, { error: 'NOT_FOUND', message: 'Không có' });
       const s = hub.get(m[1].toLowerCase(), { load: !m[2] || m[2] === 'events' });
       if (!s) return send(res, 404, { error: 'NOT_FOUND', message: 'Không tìm thấy phiên' });
@@ -883,6 +1039,7 @@ function createRemoteServer(hub) {
       else if (action === 'interrupt') s.interrupt();
       else if (action === 'mode') s.setMode(b.mode);
       else if (action === 'model') s.setModel(b.model);
+      else if (action === 'settings') s.applySettings(b);
       else if (action === 'close') s.close();
       return send(res, 200, s.summary());
     } catch (err) {
