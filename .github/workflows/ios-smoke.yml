@@ -57,6 +57,7 @@ jobs:
           j() { node -e "console.log(require('$S').$1)"; }
           mkdir -p shots
           shot() { sleep "$2"; xcrun simctl io "$UDID" screenshot "shots/$1.png"; }
+          open_s() { xcrun simctl terminate "$UDID" vn.peo.ccremote || true; xcrun simctl launch "$UDID" vn.peo.ccremote -openSession "$(j $1)"; }
 
           # chưa ghép -> màn hình ghép
           xcrun simctl launch "$UDID" vn.peo.ccremote
@@ -69,20 +70,20 @@ jobs:
           xcrun simctl launch "$UDID" vn.peo.ccremote
           shot 02-home 5
 
-          xcrun simctl openurl "$UDID" "ccremote://session/$(j chat)"
+          open_s chat
           shot 03-chat 4
-          xcrun simctl openurl "$UDID" "ccremote://session/$(j perm)"
+          open_s perm
           shot 04-permission 4
           curl -s -X POST "http://127.0.0.1:7789/v1/sessions/$(j perm)/permission" \
             -H "Authorization: Bearer $(j token)" -H 'Content-Type: application/json' \
             -d "{\"requestId\":\"req-1\",\"decision\":\"allow\"}" || true
           shot 05-permission-done 3
-          xcrun simctl openurl "$UDID" "ccremote://session/$(j ask)"
+          open_s ask
           shot 06-question 4
-          xcrun simctl openurl "$UDID" "ccremote://session/$(j limit)"
+          open_s limit
           shot 07-limit 4
           xcrun simctl ui "$UDID" appearance dark
-          xcrun simctl openurl "$UDID" "ccremote://session/$(j chat)"
+          open_s chat
           shot 08-chat-dark 4
           xcrun simctl terminate "$UDID" vn.peo.ccremote
           xcrun simctl launch "$UDID" vn.peo.ccremote

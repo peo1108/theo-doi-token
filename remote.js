@@ -170,6 +170,8 @@ function findClaude() {
 // ---------- chuẩn hoá message Claude Code -> sự kiện cho app ----------
 
 const clip = (s, n) => { s = String(s ?? ''); return s.length > n ? s.slice(0, n) + '…' : s; };
+// bỏ ký hiệu markdown cho tiêu đề / dòng xem trước
+const plain = (s) => String(s ?? '').replace(/```[\s\S]*?(```|$)/g, ' ').replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim();
 
 function toolSummary(name, input) {
   const i = input && typeof input === 'object' ? input : {};
@@ -303,7 +305,7 @@ function sessionMeta(file, st) {
       }
     } catch {}
   }
-  const meta = { cwd, title: clip(title || first || '(chưa có lời nhắn)', 100) };
+  const meta = { cwd, title: clip(plain(title || first) || '(chưa có lời nhắn)', 100) };
   metaCache.set(file, { key, meta });
   return meta;
 }
@@ -397,7 +399,7 @@ class Session {
     this.epoch = crypto.randomBytes(4).toString('hex');
     for (const e of readTranscript(f)) this.store(e, false);
     const last = [...this.events].reverse().find((e) => e.kind === 'assistant');
-    if (last) this.lastText = clip(last.text, 160);
+    if (last) this.lastText = clip(plain(last.text), 160);
     this.updatedAt = Math.round(st.mtimeMs);
     for (const c of this.clients) c.reset();
   }
@@ -407,8 +409,8 @@ class Session {
     delete ev.live;
     this.events.push(ev);
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
-    if (ev.kind === 'user' && !this.title) this.title = clip(ev.text, 100);
-    if (ev.kind === 'assistant') this.lastText = clip(ev.text, 160);
+    if (ev.kind === 'user' && !this.title) this.title = clip(plain(ev.text), 100);
+    if (ev.kind === 'assistant') this.lastText = clip(plain(ev.text), 160);
     if (live) {
       this.updatedAt = Date.now();
       for (const c of this.clients) c.send(ev);

@@ -173,7 +173,10 @@ struct StatusBadge: View {
 
     var body: some View {
         let info = statusInfo(status)
-        Label(info.label, systemImage: info.icon)
+        HStack(spacing: 4) {
+            Image(systemName: info.icon)
+            Text(info.label)
+        }
             .font(.caption2.bold())
             .padding(.horizontal, 7).padding(.vertical, 3)
             .background(color(info.color).opacity(0.15), in: Capsule())

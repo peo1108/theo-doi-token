@@ -15,6 +15,13 @@ final class AppModel {
 
     var isPaired: Bool { token != nil && !baseURL.isEmpty }
 
+    init() {
+        // `-openSession <id>` khi khởi chạy (dùng cho kiểm tra trên Simulator)
+        if let id = UserDefaults.standard.string(forKey: "openSession"), id.count == 36 {
+            path.append(Route.session(id))
+        }
+    }
+
     var api: APIClient? {
         guard let token, !baseURL.isEmpty else { return nil }
         return APIClient(base: baseURL, token: token)
