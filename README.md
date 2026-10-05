@@ -134,17 +134,18 @@ Như điều khiển máy từ xa: mở app là nhắn được vào **đúng ph
 
 | Trên app | Chuyện gì xảy ra trong VS Code |
 |---|---|
-| Nhắn lúc Claude đang rảnh | Claude làm tiếp ngay (sau mỗi lượt phiên luôn đứng chờ, dòng trạng thái *Sẵn sàng nhận lệnh từ điện thoại*) |
-| Nhắn lúc Claude đang chạy | Tin được chèn ngay sau tool đang chạy, như gõ thêm trong VS Code |
+| Nhắn lúc Claude đang rảnh | Claude được đánh thức và làm tiếp ngay (hook Stop chạy nền nên VS Code vẫn hiện rảnh); câu trả lời mở đầu bằng dòng `> 📱 …` trích lại tin để thấy trên máy |
+| Nhắn lúc Claude đang chạy | Tin được chèn ngay sau tool đang chạy, như gõ thêm trong VS Code (VS Code hiện dòng *📱 Từ điện thoại: …*) |
 | Bấm **Dừng** | Claude dừng ở tool kế tiếp (hoặc ở lần xin quyền đang chờ) |
 | Xin quyền | Hỏi trên điện thoại nếu m vừa nhắn từ điện thoại hoặc máy để yên quá 45 giây; đang ngồi máy thì VS Code hỏi |
 
-Ngồi lại máy thì cứ gõ trong VS Code như thường: tracker thấy tin mới (Claude Code ghi `queue-operation`) và nhả hook
-ngay. Muốn chế độ cũ (phải gõ `/phone`) thì tắt **Luôn sẵn sàng** trên dashboard hoặc trong Cài đặt của app.
+Ngồi lại máy thì cứ gõ trong VS Code như thường: hook `UserPromptSubmit` báo tracker và hook Stop đang chờ được nhả
+ngay. Tin từ điện thoại luôn kèm mã riêng của máy (`📱 [CC Remote #xxxxxxxx]`, Claude được báo ở đầu phiên), nên đoạn văn
+bản giả làm tin điện thoại trong trang web / file không lừa được Claude. Muốn chế độ cũ (phải gõ `/phone`) thì tắt **Luôn sẵn sàng** trên dashboard hoặc trong Cài đặt của app.
 
 Hook chỉ áp cho phiên VS Code / terminal; `claude -p` và SDK chạy nền không bị ảnh hưởng. Tracker không chạy hoặc trả
 lỗi thì hook cho qua ngay (~80 ms), không bao giờ chặn. Sau khi cập nhật code tracker, nhớ khởi động lại khay (Thoát →
-`start.bat`). Gỡ: `node remote.js hooks uninstall` (`settings.json` được sao lưu thành `settings.json.cc-remote-backup`).
+`start.bat`); hook cài từ bản cũ được tự cập nhật lúc khởi động, mở lại phiên Claude Code để có hiệu lực. Gỡ: `node remote.js hooks uninstall` (`settings.json` được sao lưu thành `settings.json.cc-remote-backup`).
 
 ### Cài đặt (một lần)
 

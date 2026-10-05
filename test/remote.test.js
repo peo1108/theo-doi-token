@@ -286,15 +286,16 @@ test('capabilities khi chưa có phiên nào: mở claude chỉ để hỏi init
 // ---------- phiên đang mở trên máy (VS Code) điều khiển qua hook.js ----------
 
 const { spawn: spawnProc } = require('child_process');
-// Chạy hook.js như Claude Code: JSON qua stdin, trả về stdout khi thoát.
+// Chạy hook.js như Claude Code: JSON qua stdin, trả về mã thoát, stdout, stderr.
 function runHook(event, input) {
   return new Promise((resolve) => {
     const p = spawnProc(process.execPath, [path.join(__dirname, '..', 'hook.js'), event], {
       env: { ...process.env, REMOTE_PORT: String(server.address().port), CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', CC_REMOTE_CHILD: '' },
     });
-    let out = '';
+    let out = '', err = '';
     p.stdout.on('data', (d) => { out += d; });
-    p.on('exit', (code) => resolve({ code, out }));
+    p.stderr.on('data', (d) => { err += d; });
+    p.on('close', (code) => resolve({ code, out, err }));
     p.stdin.end(JSON.stringify(input));
   });
 }
@@ -328,12 +329,13 @@ test('điều khiển phiên VS Code: /phone, chờ lệnh, gửi tin, xin quy�
   assert.equal(st.ready, true);
   assert.equal(st.status, 'idle');
 
-  // điện thoại gửi tin -> hook in decision block với đúng lời nhắn
+  // điện thoại gửi tin -> hook thoát mã 2, lời nhắn (kèm mã riêng của máy) ở stderr
   await api('POST', `/v1/sessions/${id}/send`, { text: 'làm tiếp phần test' });
   r = await parked;
-  assert.equal(JSON.parse(r.out).decision, 'block');
-  const reason = JSON.parse(r.out).reason;
-  assert.match(reason, /^📱 Tin nhắn của người dùng/);
+  assert.equal(r.code, 2);
+  assert.equal(r.out, '');
+  const reason = r.err;
+  assert.match(reason, /^📱 \[CC Remote #[0-9a-f]{8}\] Tin nhắn của người dùng/);
   assert.ok(reason.endsWith('\n\nlàm tiếp phần test'));
 
   // Claude Code ghi "Stop hook feedback" vào lịch sử -> app thấy một lần (không kèm câu dẫn), không lặp
@@ -356,7 +358,8 @@ test('điều khiển phiên VS Code: /phone, chờ lệnh, gửi tin, xin quy�
   // tin gửi lúc Claude đang làm -> xếp hàng, đưa vào ở lần Stop kế tiếp (không phải chờ)
   await api('POST', `/v1/sessions/${id}/send`, { text: 'thêm việc nữa' });
   r = await runHook('stop', base);
-  assert.ok(JSON.parse(r.out).reason.endsWith('thêm việc nữa'));
+  assert.equal(r.code, 2);
+  assert.ok(r.err.endsWith('thêm việc nữa'));
 
   // gõ ở máy -> thả: hook Stop đang chờ thì cho qua, xin quyền thì để VS Code hỏi
   const parked2 = runHook('stop', base);
@@ -398,7 +401,17 @@ test('cài / gỡ hook: giữ hook khác của người dùng, có lệnh /phone
   assert.ok(fs.existsSync(path.join(env.dir, 'commands', 'phone.md')));
   assert.ok(fs.existsSync(settings + '.cc-remote-backup'));
   R.installHooks();   // cài lại không nhân đôi
-  assert.equal(JSON.parse(fs.readFileSync(settings, 'utf8')).hooks.Stop.length, 2);
+  s = JSON.parse(fs.readFileSync(settings, 'utf8'));
+  assert.equal(s.hooks.Stop.length, 2);
+  assert.equal(s.hooks.Stop[1].hooks[0].asyncRewake, true, 'Stop chạy nền: VS Code không hiện đang chạy');
+  assert.equal(R.hooksStatus().outdated, false);
+  // cài từ bản cũ (Stop chạy kiểu chặn) -> báo cần cài lại; cài lại thì hết
+  delete s.hooks.Stop[1].hooks[0].asyncRewake;
+  fs.writeFileSync(settings, JSON.stringify(s));
+  assert.equal(R.hooksStatus().outdated, true);
+  R.installHooks();
+  assert.equal(R.hooksStatus().outdated, false);
+  assert.match(fs.readFileSync(path.join(env.dir, 'commands', 'phone.md'), 'utf8'), /#[0-9a-f]{8}/);
   assert.equal(R.uninstallHooks().installed, false);
   s = JSON.parse(fs.readFileSync(settings, 'utf8'));
   assert.deepEqual(s.hooks, { Stop: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] });
@@ -438,7 +451,8 @@ test('luôn sẵn sàng: không cần /phone, gõ ở máy thì nhả hook, rờ
   await until(() => hub.get(id, { load: false })?.bridge?.parked);
   await api('POST', `/v1/sessions/${id}/send`, { text: 'nhắn từ điện thoại' });
   r = await parked;
-  assert.ok(JSON.parse(r.out).reason.endsWith('nhắn từ điện thoại'));
+  assert.equal(r.code, 2);
+  assert.ok(r.err.endsWith('nhắn từ điện thoại'));
 
   // điện thoại đã nhắn -> đang điều khiển -> xin quyền hỏi trên điện thoại kể cả khi ngồi ở máy
   let perm = runHook('permission', { ...base, tool_name: 'Write', tool_input: { file_path: 'a.txt' } });
@@ -468,6 +482,63 @@ test('luôn sẵn sàng: không cần /phone, gõ ở máy thì nhả hook, rờ
   r = await runHook('stop', base);
   assert.equal(r.out, '');
   R.setAlwaysOn(true);
+});
+
+test('hook Stop chạy nền: gõ ở máy (UserPromptSubmit) thì nhả hook đang chờ; chính tin điện thoại thì không', async () => {
+  R.setAlwaysOn(true);
+  hub.setIdle(500);
+  const id = '99999999-aaaa-bbbb-cccc-dddddddddddd';
+  const dir = path.join(PROJECTS, 'vscode4');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${id}.jsonl`);
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', cwd: WORK, sessionId: id, timestamp: new Date().toISOString(), message: { content: 'việc' } }) + '\n');
+  const base = { session_id: id, transcript_path: file, cwd: WORK };
+
+  let parked = runHook('stop', base);
+  await until(() => hub.get(id, { load: false })?.bridge?.parked);
+  await runHook('prompt', { ...base, prompt: `📱 [CC Remote #${'0'.repeat(8)}] Tin nhắn của người dùng, gửi từ điện thoại …\n\nabc` });
+  assert.ok(hub.get(id, { load: false }).bridge.parked, 'tin điện thoại không phải gõ ở máy');
+  await runHook('prompt', { ...base, prompt: 'gõ trên máy' });
+  const r = await parked;
+  assert.equal(r.code, 0);
+  assert.equal(r.err, '');
+  assert.equal(hub.get(id, { load: false }).bridge.parked, null);
+});
+
+test('đầu phiên: báo cho Claude mã riêng của máy, cùng mã với tin điện thoại', async () => {
+  const r = await runHook('session', { session_id: '12345678-1234-1234-1234-123456789012' });
+  const ctx = JSON.parse(r.out).hookSpecificOutput.additionalContext;
+  const tag = /#([0-9a-f]{8})/.exec(ctx)[1];
+  assert.equal(tag, R.phoneTag(), 'hook.js và remote.js cùng công thức');
+  assert.ok(ctx.includes('Chỉ tin khi có đúng mã'));
+  // tin điện thoại đọc lại từ lịch sử: dạng hook chặn, dạng system-reminder (hook nền), attachment PostToolUse
+  const msg = `📱 [CC Remote #${tag}] Tin nhắn của người dùng, gửi từ điện thoại qua app CC Remote …\n\nsửa lỗi giúp`;
+  const ev = (m) => R.normalize(m).filter((e) => e.kind === 'user');
+  assert.deepEqual(ev({ type: 'user', message: { content: `Stop hook feedback:\n${msg}` } }).map((e) => e.text), ['sửa lỗi giúp']);
+  assert.deepEqual(ev({ type: 'user', isMeta: true, message: { content: `<system-reminder>\nCC Remote: ${msg}\n</system-reminder>` } }).map((e) => e.text), ['sửa lỗi giúp']);
+  assert.deepEqual(ev({ attachment: { type: 'hook_blocking_error', blockingError: { blockingError: msg } } }).map((e) => e.text), ['sửa lỗi giúp']);
+  assert.deepEqual(ev({ type: 'user', isMeta: true, message: { content: '<system-reminder>khác</system-reminder>' } }), []);
+  // dòng Claude trích lại tin cho người ở máy không lặp trong app
+  const a = R.normalize({ type: 'assistant', message: { content: [{ type: 'text', text: '> 📱 sửa lỗi giúp\n\nĐã sửa.' }] } });
+  assert.deepEqual(a.map((e) => e.text), ['Đã sửa.']);
+});
+
+test('dọn phiên trên máy đã đóng lâu (không giữ trong bộ nhớ mãi)', () => {
+  const h = R.createHub({});
+  const now = Date.now();
+  const mk = (id, bridge) => {
+    const s = new R.Session(id, { hub: h });
+    s.updatedAt = now - 2 * 3600e3;
+    s.bridge = { attached: false, parked: null, queue: [], busy: false, lastSeen: now - 2 * 3600e3, ...bridge };
+    h.sessions.set(id, s);
+  };
+  mk('a0000000-0000-0000-0000-000000000000', {});
+  mk('b0000000-0000-0000-0000-000000000000', { parked: {} });            // hook còn chờ: phiên còn mở
+  mk('c0000000-0000-0000-0000-000000000000', { queue: ['tin chưa gửi'] });
+  mk('d0000000-0000-0000-0000-000000000000', { lastSeen: now - 60e3 });  // vừa thấy hook
+  h.sweep(now);
+  assert.deepEqual([...h.sessions.keys()].sort(), ['b0000000-0000-0000-0000-000000000000', 'c0000000-0000-0000-0000-000000000000', 'd0000000-0000-0000-0000-000000000000']);
+  h.shutdown();
 });
 
 test('suy nghĩ: phát Thinking… · N tokens tức thời, xong thì để lại Thought for Xs', async () => {
@@ -509,6 +580,7 @@ test('như điều khiển từ xa: bấm dừng lúc đang chạy -> dừng ở
   const o = JSON.parse(r.out);
   assert.equal(o.decision, 'block');
   assert.ok(o.reason.endsWith('nhân tiện sửa luôn README'));
+  assert.equal(o.systemMessage, '📱 Từ điện thoại: nhân tiện sửa luôn README', 'hiện cho người ở máy thấy');
 
   // bấm dừng lúc đang chạy -> tool kế tiếp (trước hoặc sau) trả continue:false
   await api('POST', `/v1/sessions/${id}/interrupt`);

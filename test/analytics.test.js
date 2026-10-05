@@ -33,11 +33,18 @@ test('effectiveUsage: trước/sau mốc reset', () => {
   const u = { fetchedAtMs: 123, utilization: { five_hour: { utilization: 18, resets_at: '2026-10-05T12:19:59.991143+00:00' }, seven_day: null } };
   const before = A.effectiveUsage(u, Date.parse('2026-10-05T12:00:00Z'));
   assert.equal(before.fiveHour.pct, 18);
-  assert.equal(before.fiveHour.resetsAt, Date.parse('2026-10-05T12:19:59.991143+00:00'));
+  assert.equal(before.fiveHour.resetsAt, Date.parse('2026-10-05T12:20:00Z'));   // làm tròn tới phút
   assert.equal(before.sevenDay, null);
   assert.equal(before.fetchedAt, 123);
   const after = A.effectiveUsage(u, Date.parse('2026-10-05T12:30:00Z'));
   assert.equal(after.fiveHour.pct, 0);
+});
+
+test('effectiveUsage: mốc reset lệch vài trăm ms giữa các lần hỏi vẫn ra cùng một giá trị', () => {
+  const at = (s) => A.effectiveUsage({ utilization: { five_hour: null, seven_day: { utilization: 90, resets_at: s } } }, NOW).sevenDay.resetsAt;
+  const a = at('2026-10-12T21:59:59.802+00:00'), b = at('2026-10-12T22:00:00.145+00:00');
+  assert.equal(a, b);
+  assert.equal(a, Date.parse('2026-10-12T22:00:00Z'));
 });
 
 test('effectiveUsage: thiếu dữ liệu', () => {

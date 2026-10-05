@@ -366,6 +366,26 @@ test('checkAlerts: tài khoản mới đăng nhập báo info', () => {
   assert.ok(a, JSON.stringify(readAlerts()));
 });
 
+test('API: POST /api/config và /api/test-notify chặn CSRF, JSON sai trả 400', async () => {
+  reset();
+  writeTurns();
+  seed();
+  await withServer(async ({ call }) => {
+    const body = JSON.stringify({ budgetDay: 7 });
+    // form của trang lạ (text/plain, không có header tự đặt) không đổi được cài đặt
+    assert.equal((await call('POST', '/api/config', { body })).status, 403);
+    assert.equal((await call('POST', '/api/config', { body, headers: { ...CSRF, Origin: 'http://evil.example' } })).status, 403);
+    assert.equal((await call('GET', '/api/config')).json().budgetDay, 0);
+    assert.equal((await call('POST', '/api/test-notify')).status, 403);
+    const bad = await call('POST', '/api/config', { body: '{oops', headers: CSRF });
+    assert.equal(bad.status, 400);
+    assert.equal(bad.json().error, 'FORMAT');
+    const ok = await call('POST', '/api/config', { body, headers: CSRF });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.json().budgetDay, 7);
+  });
+});
+
 test('API: /api/* chỉ nhận Host là loopback đúng cổng (chống DNS rebinding); /metrics và trang tĩnh thì không kiểm tra', async () => {
   reset();
   writeTurns();
@@ -464,7 +484,7 @@ test('accountsInfo: số liệu cũ mà sau đó còn dùng -> stale, không đ�
 test('/api/summary: cửa sổ 5h theo mốc reset thật của tài khoản đang chọn', async () => {
   reset();
   const t0 = writeTurns();
-  const resetsAt = Date.now() + 2 * HOUR;
+  const resetsAt = Math.round((Date.now() + 2 * HOUR) / 60e3) * 60e3;   // mốc thật luôn tròn phút
   const u2 = { fetchedAtMs: Date.now(), accountUuid: 'acc-2', utilization: {
     five_hour: { utilization: 15, resets_at: new Date(resetsAt).toISOString() }, seven_day: null } };
   seed({ loginAs: 2, switchAt: t0 + 2 * HOUR, usage2: u2 });

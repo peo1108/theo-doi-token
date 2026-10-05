@@ -687,8 +687,16 @@ function createServer() {
         if (r !== null) return;
       }
       if (url.pathname === '/api/records') return json(res, records(scan()));
+      // POST đổi cài đặt / gửi thông báo thử: cùng luật chống CSRF như /api/accounts
+      const forbidden = () => send(res, 403, 'application/json; charset=utf-8', JSON.stringify({ error: 'FORBIDDEN', message: 'Yêu cầu bị từ chối' }));
       if (url.pathname === '/api/config' && req.method === 'POST') {
-        const cfg = saveConfig(JSON.parse(await readBody(req) || '{}'));
+        if (!guardPost(req)) return forbidden();
+        let patch;
+        try { patch = JSON.parse(await readBody(req) || '{}'); } catch { patch = null; }
+        if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+          return send(res, 400, 'application/json; charset=utf-8', JSON.stringify({ error: 'FORMAT', message: 'Nội dung gửi lên không phải JSON hợp lệ' }));
+        }
+        const cfg = saveConfig(patch);
         checkAlerts();
         return json(res, cfg);
       }
@@ -698,6 +706,7 @@ function createServer() {
         return json(res, loadAlerts().recent.filter((a) => a.id > after));
       }
       if (url.pathname === '/api/test-notify' && req.method === 'POST') {
+        if (!guardPost(req)) return forbidden();
         notifyWindows('Theo dõi token', 'Thông báo hoạt động bình thường');
         return json(res, { ok: true });
       }

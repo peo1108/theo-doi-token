@@ -241,7 +241,9 @@
     const u = usage && usage.utilization;
     const bucket = (b) => {
       if (!b || b.utilization == null) return null;
-      const resetsAt = b.resets_at ? Date.parse(b.resets_at) : NaN;
+      // Anthropic trả mốc reset lệch vài trăm ms mỗi lần hỏi (…59.8s, …00.1s) -> làm tròn tới phút
+      // để mốc ổn định (khoá chống báo trùng, cửa sổ 5h dựa vào nó)
+      const resetsAt = b.resets_at ? Math.round(Date.parse(b.resets_at) / MIN) * MIN : NaN;
       if (Number.isNaN(resetsAt)) return { pct: b.utilization, resetsAt: null };
       return { pct: resetsAt <= now ? 0 : b.utilization, resetsAt };
     };

@@ -340,6 +340,13 @@
   .form-actions { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .form-actions .msg { font-size: 12px; color: var(--muted); }
 
+  details.fold > summary { cursor: pointer; list-style: none; margin-bottom: 0; }
+  details.fold > summary::-webkit-details-marker { display: none; }
+  details.fold > summary h2::before { content: '›'; display: inline-block; width: 12px; color: var(--muted); transition: transform .15s ease; }
+  details.fold[open] > summary { margin-bottom: 12px; }
+  details.fold[open] > summary h2::before { transform: rotate(90deg); }
+  details.fold:not([open]) .card-sub { display: none; }
+
   .alerts { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 9px; }
   .alerts h3 { margin: 0; font-size: 13px; font-weight: 600; }
   .alert { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 8px; font-size: 12.5px; align-items: start; }
@@ -465,16 +472,16 @@
   </section>
 
   <!-- ============ điện thoại ============ -->
-  <section class="card" id="remoteCard" style="margin-bottom:10px">
-    <div class="card-head">
+  <details class="card fold" id="remoteCard" style="margin-bottom:10px">
+    <summary class="card-head">
       <div>
         <h2>Điện thoại</h2>
         <div class="card-sub">Điều khiển Claude Code từ app iOS <b>CC Remote</b> qua Tailscale · duyệt quyền, đổi tài khoản khi hết hạn mức rồi chạy tiếp</div>
       </div>
       <span class="acct-msg" id="rmMsg" hidden></span>
-    </div>
+    </summary>
     <div class="rm-grid" id="rmBody"><div class="empty">Đang tải…</div></div>
-  </section>
+  </details>
 
   <!-- ============ cửa sổ 5 giờ + ngân sách ============ -->
   <section class="grid">
@@ -733,6 +740,12 @@ let selectedSession = null;
 // tài khoản đang lọc: 'all' hoặc id hồ sơ (nhớ trong localStorage)
 let ACCOUNT = 'all';
 try { ACCOUNT = localStorage.getItem('tt-account') || 'all'; } catch {}
+// thẻ Điện thoại: mặc định gấp, nhớ lần mở/gấp gần nhất
+const remoteCard = document.getElementById('remoteCard');
+try { if (localStorage.getItem('tt-remote-open') === '1') remoteCard.open = true; } catch {}
+remoteCard.addEventListener('toggle', e => {
+  try { e.target.open ? localStorage.setItem('tt-remote-open', '1') : localStorage.removeItem('tt-remote-open'); } catch {}
+});
 
 /* =========================================================================
    2. ĐỊNH DẠNG
@@ -1110,7 +1123,14 @@ function renderBudget() {
     f.elements.notify.checked = !!CFG.notify;
   }
 
-  const list = (R.alerts || []).slice(0, 5);
+  // chỉ giữ 3 cảnh báo mới nhất, bỏ bản lặp cùng loại (vd "90%" rồi "91%")
+  const seen = new Set(), list = [];
+  for (const a of R.alerts || []) {
+    const k = a.title.replace(/[\d.,$]+/g, '#');
+    if (seen.has(k)) continue;
+    seen.add(k); list.push(a);
+    if (list.length >= 3) break;
+  }
   els('alerts').innerHTML = `<h3>Cảnh báo gần đây</h3>` + (list.length
     ? list.map(a => `<div class="alert"><i class="a-ic ${a.level}"></i><b>${esc(a.title)}</b>
         <span class="a-t">${dShort(a.t)} ${hhmm(a.t)}</span><span class="a-b">${esc(a.body)}</span></div>`).join('')
@@ -1124,7 +1144,7 @@ els('cfgForm').addEventListener('submit', async e => {
   body.alertLimitPct = Math.min(100, body.alertLimitPct);
   body.notify = f.elements.notify.checked;
   try {
-    const res = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const res = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token-Tracker': '1' }, body: JSON.stringify(body) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     CFG = await res.json();
     els('cfgMsg').textContent = 'Đã lưu ' + hhmm(Date.now());
@@ -1135,7 +1155,7 @@ els('cfgForm').addEventListener('submit', async e => {
   }
 });
 els('testNotify').addEventListener('click', async () => {
-  try { await fetch('/api/test-notify', { method: 'POST' }); els('cfgMsg').textContent = 'Đã gửi thông báo thử'; }
+  try { await fetch('/api/test-notify', { method: 'POST', headers: { 'X-Token-Tracker': '1' } }); els('cfgMsg').textContent = 'Đã gửi thông báo thử'; }
   catch { els('cfgMsg').textContent = 'Không gửi được'; }
 });
 
