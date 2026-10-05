@@ -60,3 +60,36 @@ test('hub: tài khoản, mã mời, token, khoá sai mật khẩu', async () => 
   assert.equal(lim.blocked(k, t0 + 15 * MIN + 10), false);
   db.close();
 });
+
+// ---------- Task 2: chia mảnh ----------
+
+const proto = require('../hub/proto.js');
+
+test('proto: chia và ghép tin 5 MB; header mang đích ở mọi mảnh', () => {
+  const big = { type: 'req', id: 'r1', method: 'sessions.send', params: { text: 'x'.repeat(5 * 1024 * 1024) } };
+  const parts = proto.splitMessage(big, { machine: 'm1' });
+  assert.ok(parts.length >= 20);
+  const asm = new proto.Assembler();
+  let out = null;
+  for (const buf of parts) {
+    const { header, payload } = proto.decodePart(buf);
+    assert.equal(header.type, 'part');
+    assert.equal(header.machine, 'm1');
+    assert.ok(buf.length <= 1024 * 1024);
+    out = asm.push(header, payload, Date.now());
+  }
+  assert.deepEqual(out, big);
+  assert.equal(proto.splitMessage({ type: 'req', params: { text: 'nhỏ' } }), null, 'tin nhỏ không chia');
+});
+
+test('proto: tin vượt 50 MB bị huỷ; quá 4 tin dở bị từ chối; mảnh im 60 giây bị bỏ', () => {
+  const asm = new proto.Assembler();
+  const mb = Buffer.alloc(1024 * 1024);
+  assert.throws(() => { for (let i = 0; i < 51; i++) asm.push({ pid: 'p', idx: i, last: false }, mb, 0); }, (e) => e.code === 'TOO_LARGE');
+  const a2 = new proto.Assembler();
+  for (const p of ['a', 'b', 'c', 'd']) a2.push({ pid: p, idx: 0, last: false }, mb, 0);
+  assert.throws(() => a2.push({ pid: 'e', idx: 0, last: false }, mb, 0), (e) => e.code === 'TOO_MANY');
+  a2.sweep(61e3);
+  assert.doesNotThrow(() => a2.push({ pid: 'e', idx: 0, last: false }, mb, 61e3));
+  assert.throws(() => a2.push({ pid: 'e', idx: 2, last: true }, mb, 61e3), (e) => e.code === 'BAD_PART', 'thiếu mảnh');
+});
