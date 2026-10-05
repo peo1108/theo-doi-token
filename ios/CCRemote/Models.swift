@@ -91,6 +91,11 @@ func effortLabel(_ e: String?) -> String {
     }
 }
 
+struct AskInfo: Codable, Hashable {
+    let tool: String
+    let summary: String
+}
+
 struct ThinkingInfo: Codable, Hashable {
     let tokens: Int
     let since: Double
@@ -106,6 +111,7 @@ struct SessionSummary: Codable, Identifiable, Hashable {
     let ready: Bool?
     let pcAway: Bool?
     let thinking: ThinkingInfo?
+    let ask: AskInfo?
     let cwd: String?
     let project: String?
     let title: String?

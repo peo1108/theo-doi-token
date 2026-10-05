@@ -62,7 +62,6 @@ struct HomeView: View {
         }
         .navigationTitle(app.state?.host ?? "CC Remote")
         .refreshable { await app.refresh() }
-        .task { await app.poll() }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { showSettings = true } label: { Image(systemName: "gearshape") }

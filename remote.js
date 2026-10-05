@@ -679,6 +679,7 @@ class Session {
       rate: this.rate, cost: this.cost, lastText: this.lastText, updatedAt: this.updatedAt, epoch: this.epoch,
       lastSeq: this.seq, watching: this.clients.size,
       thinking: this.thinking ? { tokens: this.thinking.tokens, since: this.thinking.since } : null,
+      ask: (() => { const p = [...this.pending.values()].pop(); return p ? { tool: p.tool, summary: toolSummary(p.tool, p.input) } : null; })(),
     };
   }
 

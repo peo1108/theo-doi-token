@@ -61,7 +61,9 @@ final class AppModel {
     func refresh() async {
         guard let api else { return }
         do {
-            state = try await api.call("GET", "/v1/state")
+            let st: RemoteState = try await api.call("GET", "/v1/state")
+            state = st
+            Notifier.shared.process(st)
             lastError = nil
             lastOK = Date()
         } catch let e as APIError {

@@ -72,6 +72,8 @@ struct SessionView: View {
             await model.run(api: api)
         }
         .task { await app.loadCaps() }
+        .onAppear { Notifier.shared.activeSessionId = model.id }      // đang xem phiên này thì không báo
+        .onDisappear { if Notifier.shared.activeSessionId == model.id { Notifier.shared.activeSessionId = nil } }
         .onAppear {
             // tham số khởi chạy cho kiểm tra trên Simulator: -openSettings YES, -draft "/co"
             if UserDefaults.standard.bool(forKey: "openSettings") { showSettings = true }

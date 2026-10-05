@@ -12,7 +12,12 @@ struct CCRemoteApp: App {
                 .onOpenURL { app.open(url: $0) }
         }
         .onChange(of: phase) { _, p in
-            if p == .active { Task { await app.refresh() } }
+            if p == .active {
+                KeepAlive.shared.stop()
+                Task { await app.refresh() }
+            } else if p == .background, app.isPaired {
+                KeepAlive.shared.start()   // giữ app chạy nền để vẫn báo khi khoá màn hình
+            }
         }
     }
 }
@@ -34,6 +39,12 @@ struct RootView: View {
                                 ProjectView(cwd: cwd)
                             }
                         }
+                }
+                // theo dõi máy tính suốt khi app còn chạy (cả khi ẩn app nhờ KeepAlive) để báo kịp thời
+                .task {
+                    Notifier.shared.setup(app: app)
+                    if Notifier.shared.enabled { await Notifier.shared.requestPermission() }
+                    await app.poll()
                 }
             } else {
                 PairView()

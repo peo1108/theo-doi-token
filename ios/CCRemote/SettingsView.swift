@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var app
@@ -7,6 +8,9 @@ struct SettingsView: View {
     @State private var message: String?
     @State private var busy = false
     @State private var confirmUnpair = false
+    @State private var notifyOn = Notifier.shared.enabled
+    @State private var keepAlive = KeepAlive.shared.enabled
+    @State private var notifyStatus: UNAuthorizationStatus = .notDetermined
 
     var body: some View {
         NavigationStack {
@@ -19,6 +23,30 @@ struct SettingsView: View {
                     if let ok = app.lastOK {
                         LabeledContent("Kết nối lần cuối", value: ok.formatted(date: .omitted, time: .standard))
                     }
+                }
+
+                Section {
+                    Toggle("Thông báo", isOn: Binding(
+                        get: { notifyOn },
+                        set: { v in
+                            notifyOn = v
+                            Notifier.shared.enabled = v
+                            if v { Task { await Notifier.shared.requestPermission(); notifyStatus = await Notifier.shared.authorizationStatus() } }
+                        }
+                    ))
+                    Toggle("Giữ kết nối khi ẩn app", isOn: Binding(
+                        get: { keepAlive },
+                        set: { v in keepAlive = v; KeepAlive.shared.enabled = v }
+                    ))
+                    if notifyStatus == .denied {
+                        Button("Mở Cài đặt iPhone để cho phép thông báo") {
+                            if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+                        }
+                    }
+                } header: {
+                    Text("Thông báo trên iPhone")
+                } footer: {
+                    Text("Báo khi Claude hỏi / xin quyền, xong việc, bị dừng hoặc hết hạn mức; bấm vào là mở đúng phiên. \"Giữ kết nối khi ẩn app\" giữ app chạy nền (âm thanh im lặng, không làm gián đoạn nhạc) để vẫn báo khi khoá màn hình — tốn pin hơn một chút. Tắt hẳn app (vuốt khỏi đa nhiệm) thì dùng ntfy ở dưới.")
                 }
 
                 Section {
@@ -79,6 +107,7 @@ struct SettingsView: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Xong") { dismiss() } }
             }
             .onAppear { topic = app.state?.ntfy?.topic ?? "" }
+            .task { notifyStatus = await Notifier.shared.authorizationStatus() }
             .confirmationDialog("Huỷ ghép?", isPresented: $confirmUnpair, titleVisibility: .visible) {
                 Button("Huỷ ghép", role: .destructive) {
                     app.unpair()

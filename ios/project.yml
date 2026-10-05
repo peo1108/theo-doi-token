@@ -43,6 +43,8 @@ targets:
           NSAllowsArbitraryLoads: true
         NSLocalNetworkUsageDescription: Kết nối tới máy tính đang chạy Claude Code.
         ITSAppUsesNonExemptEncryption: false
+        UIBackgroundModes:
+          - audio
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: vn.peo.ccremote
