@@ -68,6 +68,7 @@ function startLink({ hubUrl, machineToken, hub, onStatus = () => {}, backoff = {
 
   function connect() {
     if (stopped) return;
+    if (typeof WebSocketImpl !== 'function') return setState('upgrade', `Cần Node.js 22 trở lên để nối hub (máy đang chạy ${process.version})`);
     setState('connecting', st.error);
     let s;
     try { s = new WebSocketImpl(toWsUrl(hubUrl)); } catch (e) { return retry(e.message); }

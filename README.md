@@ -6,7 +6,7 @@ Chỉ cần Node.js, không cài thêm gói nào.
 
 ## Cài đặt
 
-1. **Cần có:** Windows 10/11, [Node.js](https://nodejs.org) bản LTS (18 trở lên), Claude Code đã đăng nhập (`/login`).
+1. **Cần có:** Windows 10/11, [Node.js](https://nodejs.org) bản LTS **22 trở lên** (bản cũ hơn không nối được hub), Claude Code đã đăng nhập (`/login`).
 2. Giải nén vào một thư mục cố định, ví dụ `Documents\theo-doi-token` (đừng chạy thẳng trong file zip hay thư mục tạm).
 3. Nháy đúp `start.bat`. Icon xuất hiện ở khay hệ thống và dashboard mở ở <http://127.0.0.1:7788>.
    Lần đầu tool đọc lại log Claude Code còn trên máy (~30 ngày) nên có thể mất vài giây.
@@ -29,7 +29,7 @@ hạn mức 5h/tuần ở `api.anthropic.com` bằng chính token Claude Code c�
 | Dòng trạng thái | `node tracker.js status` |
 | Số liệu Prometheus | `node tracker.js metrics` hoặc http://127.0.0.1:7788/metrics |
 | Chạy test | `node --test "test/*.test.js"` |
-| Ghép điện thoại | dashboard → thẻ Điện thoại, hoặc `node remote.js pair` |
+| Kết nối điện thoại (hub) | dashboard → thẻ Điện thoại → **Kết nối hub** |
 | Đổi tài khoản Claude Code | `cc-switch` (thêm thư mục dự án vào PATH) — xem [Nhiều tài khoản](#nhiều-tài-khoản) |
 
 Icon khay: xám = chưa mở cửa sổ 5 giờ · xanh = bình thường · vàng = cao hơn trung bình · đỏ = vượt ngưỡng/ngân sách.
@@ -140,7 +140,7 @@ Như điều khiển máy từ xa: mở app là nhắn được vào **đúng ph
 | Nhắn lúc Claude đang rảnh | Claude được đánh thức và làm tiếp ngay (hook Stop chạy nền nên VS Code vẫn hiện rảnh); câu trả lời mở đầu bằng dòng `> 📱 …` trích lại tin để thấy trên máy |
 | Nhắn lúc Claude đang chạy | Tin được chèn ngay sau tool đang chạy, như gõ thêm trong VS Code (VS Code hiện dòng *📱 Từ điện thoại: …*) |
 | Bấm **Dừng** | Claude dừng ở tool kế tiếp (hoặc ở lần xin quyền đang chờ) |
-| Xin quyền | Hỏi trên điện thoại nếu m vừa nhắn từ điện thoại hoặc máy để yên quá 45 giây; đang ngồi máy thì VS Code hỏi |
+| Xin quyền | Hiện **cả trên VS Code lẫn điện thoại**, bên nào trả lời trước thì được (trả lời trên máy thì điện thoại tự gỡ). Thông báo đẩy chỉ gửi khi m đang điều khiển từ điện thoại hoặc máy để yên quá 45 giây — ngồi máy lúc hỏi rồi bỏ đi thì 45 giây sau mới báo |
 
 Ngồi lại máy thì cứ gõ trong VS Code như thường: hook `UserPromptSubmit` báo tracker và hook Stop đang chờ được nhả
 ngay. Tin từ điện thoại luôn kèm mã riêng của máy (`📱 [CC Remote #xxxxxxxx]`, Claude được báo ở đầu phiên), nên đoạn văn

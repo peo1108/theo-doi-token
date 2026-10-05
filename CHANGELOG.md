@@ -1,5 +1,18 @@
 # Thay đổi
 
+## v1.2.0 — 2026-10-06
+
+- **Hub trên VPS** thay cho Tailscale: điện thoại chỉ cần internet, không cần VPN. PC tự kết nối ra hub (không mở cổng),
+  app đăng nhập bằng tài khoản hub một lần là dùng mãi. Nhiều người dùng chung một hub, mỗi người chỉ thấy máy của mình.
+- **Trang web của hub** (`https://clauderc.caesarvn.xyz`): xem / đổi tên / thu hồi máy và thiết bị, đổi mật khẩu,
+  đăng ký thông báo ntfy; admin tạo / khoá / xoá tài khoản, đặt lại mật khẩu.
+- App: **gửi ảnh** từ điện thoại, tin nhắn dài không còn giới hạn 1 MB.
+- Thông báo ntfy do hub gửi, mỗi tài khoản một topic riêng tự cấp — không phải tự đặt topic.
+- Phiên VS Code: **xin quyền hiện cả trên máy lẫn điện thoại**, bên nào trả lời trước thì được. Trước đây ngồi máy lúc
+  Claude hỏi rồi bỏ đi thì điện thoại không thấy câu hỏi.
+- Cần **Node.js 22 trở lên** (để kết nối hub); dashboard báo rõ nếu máy đang chạy bản cũ hơn.
+- Bỏ đường Tailscale và mã ghép 6 số cũ.
+
 ## v1.1.0 — 2026-10-05
 
 - **Điện thoại (CC Remote)**: app iOS điều khiển Claude Code trên máy qua Tailscale — mở/tiếp tục phiên, duyệt quyền,
