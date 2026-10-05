@@ -1,13 +1,11 @@
 import SwiftUI
 
-/// Đăng nhập hub trên VPS (hoặc tạo tài khoản bằng mã mời). Đăng nhập một lần dùng mãi — chỉ mất khi tự đăng xuất.
+/// Đăng nhập hub trên VPS bằng tài khoản admin tạo trên trang web của hub. Đăng nhập một lần dùng mãi — chỉ mất khi tự đăng xuất.
 struct LoginView: View {
     @Environment(AppModel.self) private var app
     @State private var url = UserDefaults.standard.string(forKey: "hubURL") ?? AppModel.defaultHub
-    @State private var invite = ""
     @State private var username = ""
     @State private var password = ""
-    @State private var hasInvite = false
     @State private var busy = false
     @State private var error: String?
 
@@ -21,36 +19,20 @@ struct LoginView: View {
                             .foregroundStyle(.tint)
                         Text("Điều khiển Claude Code trên máy tính từ iPhone")
                             .font(.headline)
-                        Text(hasInvite
-                             ? "Nhập mã mời admin gửi cho bạn, rồi tự đặt tên đăng nhập và mật khẩu."
-                             : "Đăng nhập tài khoản hub. Máy tính đã ghép với cùng tài khoản (dashboard → thẻ **Điện thoại** → **Hub**) sẽ hiện ra ở đây — không cần Tailscale.")
+                        Text("Đăng nhập tài khoản hub (admin tạo cho bạn trên trang web của hub). Máy tính đăng nhập cùng tài khoản (dashboard → thẻ **Điện thoại** → **Kết nối hub**) sẽ hiện ra ở đây.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 4)
                 }
 
-                Section {
-                    Picker("", selection: $hasInvite) {
-                        Text("Đăng nhập").tag(false)
-                        Text("Có mã mời").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
                 Section("Tài khoản") {
-                    if hasInvite {
-                        TextField("Mã mời (ABCD-EFGH)", text: $invite)
-                            .textInputAutocapitalization(.characters)
-                            .autocorrectionDisabled()
-                            .font(.body.monospaced())
-                    }
                     TextField("Tên đăng nhập", text: $username)
                         .textContentType(.username)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    SecureField(hasInvite ? "Mật khẩu (tối thiểu 8 ký tự)" : "Mật khẩu", text: $password)
-                        .textContentType(hasInvite ? .newPassword : .password)
+                    SecureField("Mật khẩu", text: $password)
+                        .textContentType(.password)
                 }
 
                 Section("Hub") {
@@ -74,16 +56,11 @@ struct LoginView: View {
                     } label: {
                         HStack {
                             Spacer()
-                            if busy { ProgressView() } else { Text(hasInvite ? "Tạo tài khoản" : "Đăng nhập").bold() }
+                            if busy { ProgressView() } else { Text("Đăng nhập").bold() }
                             Spacer()
                         }
                     }
-                    .disabled(busy || username.trimmingCharacters(in: .whitespaces).count < 3 || password.isEmpty || (hasInvite && invite.isEmpty))
-                }
-
-                Section {
-                    Button("Dùng Tailscale (cách cũ, mã ghép 6 số)") { app.setMode("tailscale") }
-                        .font(.footnote)
+                    .disabled(busy || username.trimmingCharacters(in: .whitespaces).count < 3 || password.isEmpty)
                 }
             }
             .navigationTitle("CC Remote")
@@ -94,7 +71,7 @@ struct LoginView: View {
         busy = true
         error = nil
         do {
-            try await app.login(url: url, username: username, password: password, invite: hasInvite ? invite : nil)
+            try await app.login(url: url, username: username, password: password)
             password = ""
         } catch let e {
             self.error = (e as? APIError)?.message ?? e.localizedDescription

@@ -234,19 +234,6 @@ struct EventHead: Decodable {
     let epoch: String?
 }
 
-struct PairResponse: Decodable {
-    let token: String
-    let deviceId: String
-    let host: String?
-}
-
-struct PingResponse: Decodable {
-    let ok: Bool
-    let app: String?
-    let version: Int?
-    let authed: Bool?
-}
-
 struct SwitchResponse: Decodable {
     let ok: Bool
     let to: String?

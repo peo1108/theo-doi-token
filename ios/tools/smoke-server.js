@@ -1,5 +1,6 @@
-// Server giả cho kiểm tra app trên Simulator (CI): remote.js thật + claude giả (test/fake-claude.js).
-// Ghi token và id các phiên mẫu ra smoke.json để workflow nạp vào app.
+// Server giả cho kiểm tra app trên Simulator (CI): hub thật + remote.js thật (qua hub-link) + claude giả (test/fake-claude.js).
+// Ghi token hub, id máy và id các phiên mẫu ra smoke.json để workflow nạp vào app.
+// Tạo file <thư mục>/allow-perm thì phiên "perm" được duyệt (thay cho bấm trên app).
 //   node ios/tools/smoke-server.js <thư mục tạm>
 const fs = require('fs');
 const path = require('path');
@@ -28,10 +29,7 @@ const hub = R.createHub({
   switchAccount: (id) => { active = id; return { ok: true, to: id, running: [] }; },
   notify: async () => true,
 });
-const server = R.createRemoteServer(hub);
-server.listen(Number(process.env.SMOKE_PORT) || 7789, '127.0.0.1', async () => {
-  const { code } = R.newPairCode();
-  const { token } = R.pair(code, 'Simulator');
+(async () => {
   const md = 'Đây là **markdown** với `code` và danh sách:\n- một\n- hai\n\n```js\nconsole.log("xin chào")\n```';
   const chat = hub.create({ cwd: work, text: md });
   await new Promise((r) => setTimeout(r, 800));
@@ -72,8 +70,17 @@ server.listen(Number(process.env.SMOKE_PORT) || 7789, '127.0.0.1', async () => {
   startLink({ hubUrl: hubBase, machineToken: pairM.machineToken, hub });
 
   await new Promise((r) => setTimeout(r, 1500));
-  const out = { token, chat: chat.id, perm: perm.id, ask: ask.id, limit: limit.id, ide, work, ponder: ponder.id,
+  // workflow tạo file allow-perm -> duyệt yêu cầu quyền đang chờ của phiên perm
+  const allowFile = path.join(dir, 'allow-perm');
+  setInterval(() => {
+    if (!fs.existsSync(allowFile)) return;
+    fs.unlinkSync(allowFile);
+    const rid = [...perm.pending.keys()][0];
+    if (rid) perm.decide(rid, { decision: 'allow' });
+  }, 300);
+
+  const out = { chat: chat.id, perm: perm.id, ask: ask.id, limit: limit.id, ide, work, ponder: ponder.id,
     hubURL: hubBase, hubToken: login.token, machineId: pairM.machineId };
   fs.writeFileSync(path.join(dir, 'smoke.json'), JSON.stringify(out));
   console.log('smoke ready', JSON.stringify(out));
-});
+})();

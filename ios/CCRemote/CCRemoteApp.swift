@@ -47,10 +47,8 @@ struct RootView: View {
                     if Notifier.shared.enabled { await Notifier.shared.requestPermission() }
                     await app.poll()
                 }
-            } else if app.isHub {
-                LoginView()
             } else {
-                PairView()
+                LoginView()
             }
         }
     }

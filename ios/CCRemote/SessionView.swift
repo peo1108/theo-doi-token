@@ -187,23 +187,21 @@ struct SessionView: View {
         }
     }
 
-    /// Nút 📎: thư viện ảnh, chụp ảnh, dán ảnh (chỉ khi kết nối qua hub — đường Tailscale cũ giới hạn 256 KB).
-    @ViewBuilder private var attachButton: some View {
-        if app.isHub {
-            Menu {
-                Button { showPhotos = true } label: { Label("Thư viện ảnh", systemImage: "photo.on.rectangle") }
-                Button { showCamera = true } label: { Label("Chụp ảnh", systemImage: "camera") }
-                if UIPasteboard.general.hasImages {
-                    Button {
-                        for img in UIPasteboard.general.images ?? [] where picks.count < ImagePrep.maxCount { picks.append(PickedImage(image: img)) }
-                    } label: { Label("Dán ảnh", systemImage: "doc.on.clipboard") }
-                }
-            } label: {
-                Image(systemName: "paperclip.circle").font(.system(size: 28))
+    /// Nút 📎: thư viện ảnh, chụp ảnh, dán ảnh.
+    private var attachButton: some View {
+        Menu {
+            Button { showPhotos = true } label: { Label("Thư viện ảnh", systemImage: "photo.on.rectangle") }
+            Button { showCamera = true } label: { Label("Chụp ảnh", systemImage: "camera") }
+            if UIPasteboard.general.hasImages {
+                Button {
+                    for img in UIPasteboard.general.images ?? [] where picks.count < ImagePrep.maxCount { picks.append(PickedImage(image: img)) }
+                } label: { Label("Dán ảnh", systemImage: "doc.on.clipboard") }
             }
-            .tint(.secondary)
-            .disabled(picks.count >= ImagePrep.maxCount)
+        } label: {
+            Image(systemName: "paperclip.circle").font(.system(size: 28))
         }
+        .tint(.secondary)
+        .disabled(picks.count >= ImagePrep.maxCount)
     }
 
     private var composerRow: some View {

@@ -11,8 +11,8 @@ private struct ErrorBody: Decodable {
     let message: String
 }
 
-/// Gọi API của remote.js. Mọi request (trừ ping/pair) mang `Authorization: Bearer <token>`.
-/// Có `hub` (chế độ VPS): cùng các lời gọi đó được chuyển thành hàm của giao thức hub tới máy `machine`.
+/// Gọi hàm trên máy tính qua hub (`hub` + `machine`): đường dẫn kiểu REST được chuyển thành hàm của giao thức hub.
+/// Không có `hub`: gọi HTTP thẳng tới hub (đăng nhập / đăng xuất).
 struct APIClient {
     let base: String
     let token: String?
@@ -49,16 +49,7 @@ struct APIClient {
         return URLSession(configuration: c)
     }()
 
-    /// Luồng SSE: server gửi nhịp 15 giây/lần nên 60 giây không có byte nào là mất kết nối.
-    static let streamSession: URLSession = {
-        let c = URLSessionConfiguration.default
-        c.timeoutIntervalForRequest = 60
-        c.timeoutIntervalForResource = 7 * 24 * 3600
-        c.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: c)
-    }()
-
-    /// "pc.tailnet.ts.net" -> "https://pc.tailnet.ts.net", bỏ dấu / cuối.
+    /// "hub.vidu.com" -> "https://hub.vidu.com", bỏ dấu / cuối.
     static func normalize(_ raw: String) -> String {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !s.isEmpty && !s.lowercased().hasPrefix("http://") && !s.lowercased().hasPrefix("https://") {
@@ -112,42 +103,18 @@ struct APIClient {
         }
     }
 
-    /// Đọc SSE của một phiên: mỗi dòng `data: {...}` là một sự kiện JSON hoàn chỉnh.
+    /// Theo dõi một phiên qua hub: phát lại sự kiện sau `after` rồi đẩy sự kiện mới.
     func events(session id: String, after: Int, epoch: String) -> AsyncThrowingStream<Data, Error> {
-        if let hub {
-            let machine = self.machine
-            return AsyncThrowingStream { continuation in
-                let task = Task { @MainActor in
-                    do {
-                        for try await d in hub.subscribe(machine: machine, session: id, after: after, epoch: epoch) { continuation.yield(d) }
-                        continuation.finish()
-                    } catch { continuation.finish(throwing: error) }
-                }
-                continuation.onTermination = { _ in task.cancel() }
-            }
+        guard let hub else {
+            return AsyncThrowingStream { $0.finish(throwing: APIError(code: "UNPAIRED", message: "Chưa đăng nhập hub")) }
         }
+        let machine = self.machine
         return AsyncThrowingStream { continuation in
-            let task = Task {
+            let task = Task { @MainActor in
                 do {
-                    let ep = epoch.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
-                    var req = try makeRequest("GET", "/v1/sessions/\(id)/events?after=\(after)&epoch=\(ep)")
-                    req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                    let (bytes, resp) = try await Self.streamSession.bytes(for: req)
-                    let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-                    guard code == 200 else {
-                        throw APIError(code: "HTTP_\(code)", message: code == 404 ? "Không tìm thấy phiên" : code == 401 ? "Thiết bị chưa ghép hoặc đã bị thu hồi" : "Máy tính trả lỗi \(code)")
-                    }
-                    for try await line in bytes.lines {
-                        if line.hasPrefix("data: ") {
-                            continuation.yield(Data(line.dropFirst(6).utf8))
-                        }
-                    }
+                    for try await d in hub.subscribe(machine: machine, session: id, after: after, epoch: epoch) { continuation.yield(d) }
                     continuation.finish()
-                } catch let e as URLError {
-                    continuation.finish(throwing: APIError(code: "NETWORK", message: Self.describe(e)))
-                } catch {
-                    continuation.finish(throwing: error)
-                }
+                } catch { continuation.finish(throwing: error) }
             }
             continuation.onTermination = { _ in task.cancel() }
         }
@@ -156,12 +123,12 @@ struct APIClient {
     static func describe(_ e: URLError) -> String {
         switch e.code {
         case .notConnectedToInternet: return "Điện thoại đang không có mạng"
-        case .cannotFindHost, .dnsLookupFailed: return "Không tìm thấy máy tính — Tailscale trên điện thoại đã bật chưa?"
-        case .cannotConnectToHost: return "Máy tính không nhận kết nối — tracker có đang chạy không?"
+        case .cannotFindHost, .dnsLookupFailed: return "Không tìm thấy hub — kiểm tra địa chỉ hub và mạng"
+        case .cannotConnectToHost: return "Không kết nối được hub"
         case .timedOut: return "Hết thời gian chờ máy tính phản hồi"
         case .networkConnectionLost: return "Mất kết nối tới máy tính"
         case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate:
-            return "Lỗi HTTPS — kiểm tra lại `tailscale serve` trên máy tính"
+            return "Lỗi HTTPS khi kết nối hub"
         case .cancelled: return "Đã huỷ"
         default: return e.localizedDescription
         }

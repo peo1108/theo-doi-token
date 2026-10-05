@@ -1,6 +1,6 @@
 name: iOS smoke (Simulator)
 
-# Chạy tay (hoặc khi sửa chính file này): build cho Simulator, dựng server giả (remote.js + claude giả), mở các màn hình và chụp ảnh.
+# Chạy tay (hoặc khi sửa chính file này): build cho Simulator, dựng hub + server giả (remote.js + claude giả), mở các màn hình và chụp ảnh.
 on:
   workflow_dispatch:
   push:
@@ -60,42 +60,41 @@ jobs:
           shot() { sleep "$2"; xcrun simctl io "$UDID" screenshot "shots/$1.png"; }
           open_s() { xcrun simctl terminate "$UDID" vn.peo.ccremote || true; xcrun simctl launch "$UDID" vn.peo.ccremote -openSession "$(j $1)"; }
 
-          # chưa ghép -> màn hình ghép
+          # chưa đăng nhập -> màn đăng nhập hub
           xcrun simctl launch "$UDID" vn.peo.ccremote
-          shot 01-pair 4
+          shot 01-login 4
           xcrun simctl terminate "$UDID" vn.peo.ccremote
 
-          # nạp sẵn địa chỉ + token (SecureStore rơi về UserDefaults khi Keychain trống)
-          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote baseURL "http://127.0.0.1:7789"
-          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote secure.token "$(j token)"
+          # nạp sẵn đăng nhập hub (SecureStore rơi về UserDefaults khi Keychain trống) + máy đã chọn
+          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote hubURL "$(j hubURL)"
+          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote secure.hubToken "$(j hubToken)"
+          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote machineId "$(j machineId)"
           xcrun simctl launch "$UDID" vn.peo.ccremote
-          shot 02-home 5
+          shot 02-home 6
 
           open_s chat
-          shot 03-chat 4
+          shot 03-chat 5
           open_s perm
-          shot 04-permission 4
-          curl -s -X POST "http://127.0.0.1:7789/v1/sessions/$(j perm)/permission" \
-            -H "Authorization: Bearer $(j token)" -H 'Content-Type: application/json' \
-            -d "{\"requestId\":\"req-1\",\"decision\":\"allow\"}" || true
+          shot 04-permission 5
+          touch "$RUNNER_TEMP/smoke/allow-perm"   # server giả duyệt quyền
           shot 05-permission-done 3
           open_s ask
-          shot 06-question 4
+          shot 06-question 5
           open_s limit
-          shot 07-limit 4
+          shot 07-limit 5
           xcrun simctl ui "$UDID" appearance dark
           open_s chat
-          shot 08-chat-dark 4
+          shot 08-chat-dark 5
           xcrun simctl terminate "$UDID" vn.peo.ccremote
           xcrun simctl launch "$UDID" vn.peo.ccremote
-          shot 09-home-dark 5
+          shot 09-home-dark 6
           xcrun simctl ui "$UDID" appearance light
           xcrun simctl terminate "$UDID" vn.peo.ccremote || true
           xcrun simctl launch "$UDID" vn.peo.ccremote -openSession "$(j chat)" -openSettings YES
-          shot 10-settings 5
+          shot 10-session-settings 6
           xcrun simctl terminate "$UDID" vn.peo.ccremote || true
           xcrun simctl launch "$UDID" vn.peo.ccremote -openSession "$(j chat)" -draft "/co"
-          shot 11-commands 5
+          shot 11-commands 6
           open_s ide
           shot 12-vscode 5
           xcrun simctl ui "$UDID" appearance dark
@@ -104,31 +103,12 @@ jobs:
           xcrun simctl ui "$UDID" appearance light
           xcrun simctl terminate "$UDID" vn.peo.ccremote || true
           xcrun simctl launch "$UDID" vn.peo.ccremote
-          shot 14-home-projects 5
+          shot 14-home-projects 6
           xcrun simctl terminate "$UDID" vn.peo.ccremote || true
           xcrun simctl launch "$UDID" vn.peo.ccremote -openProject "$(j work)"
-          shot 15-project 5
+          shot 15-project 6
           open_s ponder
-          shot 16-thinking 4
-
-          # chế độ hub (VPS): đăng nhập tài khoản, máy đã ghép, không cần Tailscale
-          xcrun simctl terminate "$UDID" vn.peo.ccremote || true
-          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote mode hub
-          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote hubURL "$(j hubURL)"
-          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote secure.hubToken "$(j hubToken)"
-          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote machineId "$(j machineId)"
-          xcrun simctl launch "$UDID" vn.peo.ccremote
-          shot 17-hub-home 6
-          open_s chat
-          shot 18-hub-chat 5
-          xcrun simctl terminate "$UDID" vn.peo.ccremote || true
-          xcrun simctl launch "$UDID" vn.peo.ccremote -openSession "$(j chat)" -openSettings YES
-          shot 19-hub-session-settings 5
-          # đăng xuất (xoá token) -> màn đăng nhập hub
-          xcrun simctl terminate "$UDID" vn.peo.ccremote || true
-          xcrun simctl spawn "$UDID" defaults delete vn.peo.ccremote secure.hubToken || true
-          xcrun simctl launch "$UDID" vn.peo.ccremote
-          shot 20-hub-login 4
+          shot 16-thinking 5
           cat "$RUNNER_TEMP/server.log"
 
       - name: Upload screenshots
