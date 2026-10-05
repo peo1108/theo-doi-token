@@ -9,6 +9,7 @@ const fs = require('fs');
 const { execFileSync } = require('child_process');
 const os = require('os');
 const path = require('path');
+const { effectiveUsage, loginState } = require('./analytics.js');
 
 const BACKUP_KEEP = 5;            // số cặp sao lưu giữ lại
 const LOCK_TTL_MS = 30e3;         // khoá hết hạn sau 30 giây
@@ -17,7 +18,7 @@ const WRITE_RETRY_MS = 100;
 const RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
 class AccountError extends Error {
-  // code: FORMAT | NOT_FOUND | AMBIGUOUS | LOCKED | NO_TOKEN | WRITE_FAILED | ACTIVE
+  // code: FORMAT | NOT_FOUND | AMBIGUOUS | LOCKED | NO_TOKEN | WRITE_FAILED | ACTIVE | NAME_TAKEN
   constructor(code, message, options) {
     super(message || code, options);
     this.name = 'AccountError';
@@ -639,6 +640,39 @@ function keep(now = Date.now()) {
   }, now);
 }
 
+// ---------- đổi tên / xoá hồ sơ ----------
+
+// Đổi tên hồ sơ. Đây là nơi duy nhất giữ luật "tên không trùng hồ sơ khác" (không phân biệt hoa thường).
+// -> hồ sơ đã đổi tên.
+function rename(query, newName, now = Date.now()) {
+  const name = String(newName ?? '').trim();
+  if (!name) throw new AccountError('FORMAT', 'Tên mới không được để trống');
+  return withLock(() => {
+    const profiles = listProfiles();
+    const target = resolve(query, profiles);
+    const lower = name.toLowerCase();
+    if (profiles.some((p) => !p.error && p.id !== target.id && String(p.name ?? '').toLowerCase() === lower)) {
+      throw new AccountError('NAME_TAKEN', `Tên "${name}" đã có tài khoản khác dùng`);
+    }
+    const next = { ...target, name };
+    saveProfile(next);
+    return next;
+  }, now);
+}
+
+// Xoá file hồ sơ (không đụng file đăng nhập và dòng thời gian). Không xoá được tài khoản đang được chọn.
+// -> { id }
+function remove(query) {
+  return withLock(() => {
+    const target = resolve(query, listProfiles());
+    if (target.id === chosenId(readLog())) {
+      throw new AccountError('ACTIVE', `"${target.name}" đang là tài khoản được chọn`);
+    }
+    deleteProfile(target.id);
+    return { id: target.id };
+  });
+}
+
 module.exports = {
   AccountError, paths, readLogin, profileFromLogin,
   listProfiles, loadProfile, saveProfile, deleteProfile,
@@ -646,7 +680,105 @@ module.exports = {
   withLock, isLocked, publicView,
   readLog, writeLog, addEntry, chosenId,
   isClaudeCodeProcess, findClaudeProcesses, parseWindowsProcesses, parsePsProcesses,
-  snapshot, switchTo, sync, keep,
+  snapshot, switchTo, sync, keep, rename, remove,
 };
 
-// (Khối CLI sẽ được thêm ở task sau.)
+// ---------- dòng lệnh: cc-switch ----------
+
+const USAGE = [
+  'Cách dùng:',
+  '  cc-switch                          liệt kê tài khoản (* = đang chọn)',
+  '  cc-switch <tên|email|id>           đổi sang tài khoản đó',
+  '  cc-switch rename <tài khoản> <tên mới>',
+  '  cc-switch remove <tài khoản>       xoá hồ sơ (không xoá được tài khoản đang chọn)',
+  '  cc-switch keep                     giữ tài khoản trong file đăng nhập khi có xung đột',
+].join('\n');
+
+const pad2 = (n) => String(n).padStart(2, '0');
+const fmtDate = (t) => { const d = new Date(t); return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`; };
+
+function loginText(expiresAt, now) {
+  switch (loginState(expiresAt, now)) {
+    case 'ok': return fmtDate(expiresAt);
+    case 'soon': return `còn ${Math.max(1, Math.ceil((expiresAt - now) / 864e5))} ngày`;
+    case 'expired': return 'cần /login lại';
+    default: return '—';
+  }
+}
+
+function listing(now) {
+  const profiles = listProfiles();
+  if (!profiles.length) return 'Chưa có tài khoản nào — /login trong Claude Code rồi chạy lại';
+  const chosen = chosenId(readLog());
+  const pct = (b) => (b ? `${Math.round(b.pct)}%` : '—');
+  const rows = profiles.map((p) => {
+    if (p.error) return ['', p.id, '', '', '', '', 'hồ sơ hỏng'];
+    const eu = effectiveUsage(p.usage, now);
+    return [p.id === chosen ? '*' : '', p.name, p.email, p.plan || '—', `5h ${pct(eu.fiveHour)}`, `tuần ${pct(eu.sevenDay)}`,
+      loginText(p.oauth?.refreshTokenExpiresAt ?? null, now)];
+  });
+  const widths = rows[0].map((_, c) => Math.max(...rows.map((r) => r[c].length)));
+  return rows.map((r) => r.map((cell, c) => cell.padEnd(widths[c])).join('  ').trimEnd()).join('\n');
+}
+
+const ERROR_TEXT = {
+  FORMAT: (m) => `Lỗi định dạng: ${m}`,
+  NOT_FOUND: (m) => m,
+  AMBIGUOUS: (m) => `${m}. Hãy gõ rõ hơn`,
+  LOCKED: () => 'Đang có thao tác đổi tài khoản khác, thử lại sau vài giây',
+  NO_TOKEN: (m) => `Không có token đăng nhập: ${m}`,
+  WRITE_FAILED: (m) => `Lỗi ghi file: ${m}`,
+  ACTIVE: (m) => `Không xoá được: ${m}, hãy đổi sang tài khoản khác trước`,
+  NAME_TAKEN: (m) => `${m}, hãy chọn tên khác`,
+};
+
+const describe = (p, id) => (p ? `${p.name} (${p.email})` : id);
+
+function runCli(argv, out, err) {
+  const [cmd, ...rest] = argv;
+  const word = typeof cmd === 'string' ? cmd.toLowerCase() : '';
+  if (word === '-h' || word === '--help') { out(USAGE); return 0; }
+  const usageError = (line) => { err(`${line}\n${USAGE}`); return 1; };
+  try {
+    if (cmd === undefined) {
+      sync();
+      out(listing(Date.now()));
+      return 0;
+    }
+    if (word === 'rename') {
+      if (rest.length < 2) return usageError('Thiếu tên: cc-switch rename <tài khoản> <tên mới>');
+      const p = rename(rest[0], rest.slice(1).join(' '));
+      out(`Đã đổi tên thành ${p.name} (${p.email})`);
+      return 0;
+    }
+    if (word === 'remove') {
+      if (rest.length < 1) return usageError('Thiếu tên: cc-switch remove <tài khoản>');
+      const target = resolve(rest[0], listProfiles());
+      remove(target.id);
+      out(`Đã xoá hồ sơ ${describe(target)}`);
+      return 0;
+    }
+    if (word === 'keep') {
+      const r = keep();
+      out(`Đã giữ ${describe(loadProfile(r.id), r.id)} là tài khoản đang dùng`);
+      return 0;
+    }
+    const r = switchTo(cmd);
+    const p = loadProfile(r.to);
+    out(r.already ? `Đang dùng sẵn ${describe(p, r.to)}` : `Đã đổi sang ${describe(p, r.to)}`);
+    if (r.running.length > 0) err(`Cảnh báo: ${r.running.length} phiên Claude Code đang chạy vẫn dùng tài khoản cũ cho tới khi khởi động lại`);
+    if (!r.checked && !r.already) err('Không kiểm tra được phiên đang chạy');
+    return 0;
+  } catch (e) {
+    if (e instanceof AccountError) {
+      err((ERROR_TEXT[e.code] || ((m) => m))(e.message));
+      return e.code === 'NOT_FOUND' || e.code === 'AMBIGUOUS' ? 2 : 1;
+    }
+    err(e && e.message ? e.message : String(e));
+    return 1;
+  }
+}
+
+if (require.main === module) {
+  process.exitCode = runCli(process.argv.slice(2), (s) => console.log(s), (s) => console.error(s));
+}

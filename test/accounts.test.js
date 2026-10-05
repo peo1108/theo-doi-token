@@ -962,3 +962,74 @@ test('keep: không có conflict -> NOT_FOUND; đang bị khoá -> LOCKED', () =>
     assert.notEqual(A.readLog().conflict, null);
   });
 });
+
+// ---------- rename / remove ----------
+
+function setupRenameRemove(dir) {
+  const a1 = fakeAccount(1);
+  const a2 = fakeAccount(2);
+  writeLoginFiles(dir, a1);
+  A.saveProfile(profileOf(a1));
+  A.saveProfile(profileOf(a2));
+  const log = A.readLog();
+  A.addEntry(log, { t: 100, id: 'acc-1', reason: 'init' });
+  A.writeLog(log);
+}
+
+test('rename: đổi tên (cắt khoảng trắng), trả hồ sơ mới, chỉ đổi name', () => {
+  withEnv(({ dir }) => {
+    setupRenameRemove(dir);
+    const before = JSON.parse(profText('acc-2'));
+    const p = A.rename('user2', '  work  ', 5000);
+    assert.equal(p.name, 'work');
+    assert.equal(p.id, 'acc-2');
+    const after = JSON.parse(profText('acc-2'));
+    assert.deepEqual({ ...after, name: before.name }, before);
+    assert.equal(A.resolve('work', A.listProfiles()).id, 'acc-2');
+    assert.equal(A.isLocked(), false);
+  });
+});
+
+test('rename: tên rỗng -> FORMAT; trùng hồ sơ khác (không phân biệt hoa thường) -> NAME_TAKEN; đổi hoa thường của chính mình được', () => {
+  withEnv(({ dir }) => {
+    setupRenameRemove(dir);
+    throwsCode(() => A.rename('user2', '   '), 'FORMAT');
+    throwsCode(() => A.rename('user2', 'USER1'), 'NAME_TAKEN');
+    assert.equal(JSON.parse(profText('acc-2')).name, 'user2');
+    assert.equal(A.rename('user2', 'USER2').name, 'USER2');
+    throwsCode(() => A.rename('zzz', 'x'), 'NOT_FOUND');
+  });
+});
+
+test('rename: đang bị khoá -> LOCKED', () => {
+  withEnv(({ dir }) => {
+    setupRenameRemove(dir);
+    fs.writeFileSync(A.paths().lockFile, JSON.stringify({ pid: process.pid, t: Date.now() }));
+    throwsCode(() => A.rename('user2', 'work', Date.now()), 'LOCKED');
+  });
+});
+
+test('remove: xoá đúng file hồ sơ, không đụng file đăng nhập và log', () => {
+  withEnv(({ dir }) => {
+    setupRenameRemove(dir);
+    const credBefore = readText(A.paths().credFile);
+    const cfgBefore = readText(A.paths().claudeJson);
+    const logBefore = readText(A.paths().logFile);
+    assert.deepEqual(A.remove('user2'), { id: 'acc-2' });
+    assert.equal(A.loadProfile('acc-2'), null);
+    assert.notEqual(A.loadProfile('acc-1'), null);
+    assert.equal(readText(A.paths().credFile), credBefore);
+    assert.equal(readText(A.paths().claudeJson), cfgBefore);
+    assert.equal(readText(A.paths().logFile), logBefore);
+    assert.equal(A.isLocked(), false);
+  });
+});
+
+test('remove: đang được chọn -> ACTIVE (hồ sơ còn nguyên); không có -> NOT_FOUND', () => {
+  withEnv(({ dir }) => {
+    setupRenameRemove(dir);
+    throwsCode(() => A.remove('user1'), 'ACTIVE');
+    assert.notEqual(A.loadProfile('acc-1'), null);
+    throwsCode(() => A.remove('zzz'), 'NOT_FOUND');
+  });
+});
