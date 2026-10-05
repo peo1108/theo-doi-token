@@ -528,3 +528,24 @@ test('hook bỏ qua claude -p / SDK (không được đứng chờ)', async () =
   assert.ok(Date.now() - t0 < 2000);
   assert.ok(!hub.sessions.has('77777777-8888-9999-aaaa-bbbbbbbbbbbb'), 'không gọi server');
 });
+
+test('hook không bao giờ chặn nhầm khi server trả lỗi (vd. tracker bản cũ chưa có route)', async () => {
+  const bad = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'UNAUTHORIZED', message: 'Thiết bị chưa ghép hoặc đã bị thu hồi' }));
+  });
+  await new Promise((r) => bad.listen(0, '127.0.0.1', r));
+  const port = String(bad.address().port);
+  for (const ev of ['pretool', 'tool', 'stop', 'permission', 'prompt']) {
+    const p = spawnProc(process.execPath, [path.join(__dirname, '..', 'hook.js'), ev], {
+      env: { ...process.env, REMOTE_PORT: port, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', CC_REMOTE_CHILD: '' },
+    });
+    let out = '';
+    p.stdout.on('data', (d) => { out += d; });
+    const code = await new Promise((res) => { p.on('exit', res); p.stdin.end(JSON.stringify({ session_id: '88888888-9999-aaaa-bbbb-cccccccccccc', tool_name: 'Bash' })); });
+    assert.equal(code, 0, ev);
+    assert.equal(out, '', `${ev} không được in gì`);
+  }
+  bad.close();
+});

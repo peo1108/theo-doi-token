@@ -1197,7 +1197,7 @@ function createHub(ctx = {}) {
         const text = br.queue.shift();
         if (!br.attached) s.attach(true);
         s.broadcastState();
-        return { message: phoneMessage(text) };
+        return { inject: phoneMessage(text) };
       }
       return {};
     },

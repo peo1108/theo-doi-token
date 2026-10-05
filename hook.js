@@ -32,10 +32,12 @@ function post(route, body) {
       host: '127.0.0.1', port: Number(process.env.REMOTE_PORT) || 7789, path: `/v1/hook/${route}`, method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': data.length, 'X-Hook-Key': readKey() },
     }, (res) => {
+      // chỉ làm theo phản hồi thành công; lỗi (tracker cũ, sai khoá...) thì cho qua, không bao giờ chặn nhầm
+      if (res.statusCode !== 200) { res.resume(); return resolve(null); }
       let t = '';
       res.setEncoding('utf8');
       res.on('data', (d) => { t += d; });
-      res.on('end', () => { try { resolve(JSON.parse(t)); } catch { resolve(null); } });
+      res.on('end', () => { try { const j = JSON.parse(t); resolve(j && j.error ? null : j); } catch { resolve(null); } });
       res.on('error', () => resolve(null));
     });
     req.on('error', () => resolve(null));   // tracker không chạy -> bị từ chối ngay, phiên chạy như thường
@@ -70,7 +72,7 @@ process.stdin.on('end', async () => {
   } else if (event === 'tool' || event === 'pretool') {
     r = await post(event, { ...base, tool_name: j.tool_name });
     if (r && r.stop) process.stdout.write(JSON.stringify({ continue: false, stopReason: r.reason || 'Đã dừng từ điện thoại' }));
-    else if (r && r.message) process.stdout.write(JSON.stringify({ decision: 'block', reason: r.message }));
+    else if (r && r.inject) process.stdout.write(JSON.stringify({ decision: 'block', reason: r.inject }));
   } else if (event === 'prompt') {
     await post('prompt', { ...base, prompt: String(j.prompt || '').slice(0, 500) });
   }
