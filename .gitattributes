@@ -1,0 +1,3 @@
+# script chạy trên Linux (VPS): luôn LF
+*.sh text eol=lf
+hub/deploy/* text eol=lf

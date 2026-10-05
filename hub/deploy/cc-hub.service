@@ -1,0 +1,27 @@
+[Unit]
+Description=CC Remote Hub (trung chuyển app iOS <-> PC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=cchub
+Group=cchub
+WorkingDirectory=@HUB_DIR@
+Environment=NODE_ENV=production
+Environment=HUB_DATA=@DATA_DIR@
+Environment=HUB_HOST=127.0.0.1
+Environment=HUB_PORT=7790
+ExecStart=/usr/bin/node @HUB_DIR@/hub.js serve
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=@DATA_DIR@
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

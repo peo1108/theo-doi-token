@@ -1,0 +1,15 @@
+# Caddy tự xin / gia hạn chứng chỉ Let's Encrypt cho tên miền (bản ghi A phải trỏ về VPS, Cloudflare để "DNS only").
+@DOMAIN@ {
+	reverse_proxy 127.0.0.1:7790
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+	log {
+		output file /var/log/caddy/cc-hub.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+	}
+}
