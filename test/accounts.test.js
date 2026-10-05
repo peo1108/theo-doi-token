@@ -701,3 +701,264 @@ test('switchTo: xoá conflict', () => {
     assert.equal(A.readLog().conflict, null);
   });
 });
+
+test('switchTo: mục log mới luôn là mục cuối (t bị kẹp lên không nhỏ hơn mục cuối)', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);
+    const log = A.readLog();
+    A.addEntry(log, { t: 9000, id: 'acc-1', reason: 'login' });
+    A.writeLog(log);
+    A.switchTo('user2', { now: 5000, processes: noProcs });
+    const l2 = A.readLog();
+    assert.deepEqual(l2.entries.at(-1), { t: 9000, id: 'acc-2', reason: 'switch', running: 0 });
+    assert.equal(A.chosenId(l2), 'acc-2');
+  });
+});
+
+test('switchTo: file đã là đích nhưng đang chọn tài khoản khác -> ghi mục switch, xoá conflict, không đụng file', () => {
+  withEnv(({ dir }) => {
+    setupTwo(dir);   // file = acc1
+    const log = A.readLog();
+    A.addEntry(log, { t: 200, id: 'acc-2', reason: 'switch' });
+    log.conflict = { fileId: 'acc-1', chosenId: 'acc-2', since: 300 };
+    A.writeLog(log);
+    const files0 = filesText();
+    const r = A.switchTo('user1', { now: 5000, processes: () => ({ ok: true, list: [{ pid: 1 }, { pid: 2 }] }) });
+    assert.equal(r.already, true);
+    assert.equal(r.from, 'acc-1');
+    assert.equal(r.to, 'acc-1');
+    assert.equal(r.running.length, 2);
+    assert.equal(r.checked, true);
+    const l2 = A.readLog();
+    assert.deepEqual(l2.entries.at(-1), { t: 5000, id: 'acc-1', reason: 'switch', running: 2 });
+    assert.equal(l2.conflict, null);
+    assert.equal(A.chosenId(l2), 'acc-1');
+    assert.deepEqual(filesText(), files0);
+    assert.equal(backupCount(), 0);
+    assert.equal(A.isLocked(), false);
+  });
+});
+
+test('isClaudeCodeProcess: ExecutablePath null + command line không đặt trong dấu nháy (đường dẫn có khoảng trắng) vẫn nhận ra ứng dụng desktop', () => {
+  assert.equal(A.isClaudeCodeProcess({ name: 'Claude.exe', path: null, cmd: `${DESKTOP_EXE} --type=renderer --lang=en-US` }), false);
+  assert.equal(A.isClaudeCodeProcess({ name: 'Claude.exe', path: null, cmd: DESKTOP_EXE }), false);
+  assert.equal(A.isClaudeCodeProcess({ name: 'claude.exe', path: null, cmd: 'C:\\Users\\cam\\My Tools\\claude.exe --resume' }), true);
+});
+
+// ---------- sync / keep ----------
+
+// acc1 trong file, chọn acc2 (đã có hồ sơ acc1 và acc2), log: acc2 được chọn từ t=100.
+function setupChosen2(dir, extras) {
+  const a1 = fakeAccount(1);
+  const a2 = fakeAccount(2);
+  writeLoginFiles(dir, a1, extras);
+  A.saveProfile(profileOf(a1));
+  A.saveProfile(profileOf(a2));
+  const log = A.readLog();
+  A.addEntry(log, { t: 100, id: 'acc-2', reason: 'init' });
+  A.writeLog(log);
+  return { a1, a2 };
+}
+
+const profText = (id) => readText(path.join(A.paths().profilesDir, `${id}.json`));
+
+test('sync: lần đầu (không hồ sơ, không log) -> tạo hồ sơ + mục init, added', () => {
+  withEnv(({ dir }) => {
+    writeLoginFiles(dir, fakeAccount(1));
+    const r = A.sync(5000);
+    assert.deepEqual(r, { added: 'acc-1' });
+    const p = A.loadProfile('acc-1');
+    assert.equal(p.name, 'user1');
+    assert.equal(p.savedAt, 5000);
+    assert.equal(p.oauth.refreshToken, 'rt-1');
+    assert.deepEqual(A.readLog(), { v: 1, entries: [{ t: 0, id: 'acc-1', reason: 'init' }], conflict: null });
+    assert.equal(A.isLocked(), false);
+  });
+});
+
+test('sync: log đã có, file đổi sang tài khoản chưa có hồ sơ -> hồ sơ mới + mục login, tên không trùng', () => {
+  withEnv(({ dir }) => {
+    const a1 = fakeAccount(1);
+    const a3 = fakeAccount(3);
+    A.saveProfile(profileOf(a1));
+    A.saveProfile(profileOf(a3, { id: 'acc-9', name: 'user3' }));   // tên user3 đã bị chiếm
+    const log = A.readLog();
+    A.addEntry(log, { t: 100, id: 'acc-1', reason: 'init' });
+    A.writeLog(log);
+    writeLoginFiles(dir, a3);
+    const r = A.sync(5000);
+    assert.deepEqual(r, { added: 'acc-3' });
+    assert.equal(A.loadProfile('acc-3').name, 'user32');
+    const l = A.readLog();
+    assert.deepEqual(l.entries.at(-1), { t: 5000, id: 'acc-3', reason: 'login' });
+    assert.equal(A.chosenId(l), 'acc-3');
+    assert.equal(l.conflict, null);
+  });
+});
+
+test('sync: mục login mới luôn là mục cuối (t bị kẹp), và xoá conflict cũ', () => {
+  withEnv(({ dir }) => {
+    setupChosen2(dir);
+    const log = A.readLog();
+    A.addEntry(log, { t: 9000, id: 'acc-2', reason: 'switch' });
+    log.conflict = { fileId: 'acc-1', chosenId: 'acc-2', since: 200 };
+    A.writeLog(log);
+    writeLoginFiles(dir, fakeAccount(3));
+    A.sync(5000);
+    const l = A.readLog();
+    assert.deepEqual(l.entries.at(-1), { t: 9000, id: 'acc-3', reason: 'login' });
+    assert.equal(A.chosenId(l), 'acc-3');
+    assert.equal(l.conflict, null);
+  });
+});
+
+test('sync: file = tài khoản đang chọn, token đổi -> cập nhật hồ sơ; không đổi -> không ghi file hồ sơ', () => {
+  withEnv(({ dir }) => {
+    writeLoginFiles(dir, fakeAccount(1));
+    A.sync(1000);                                          // tạo hồ sơ, savedAt 1000
+    const log0 = A.readLog();
+    const text0 = profText('acc-1');
+    assert.deepEqual(A.sync(2000), {});                    // không đổi gì
+    assert.equal(A.loadProfile('acc-1').savedAt, 1000);
+    assert.equal(profText('acc-1'), text0);
+    editJSON(A.paths().credFile, (o) => { o.claudeAiOauth.refreshToken = 'rt-1b'; });
+    assert.deepEqual(A.sync(3000), { updated: 'acc-1' });
+    const p = A.loadProfile('acc-1');
+    assert.equal(p.oauth.refreshToken, 'rt-1b');
+    assert.equal(p.savedAt, 3000);
+    assert.equal(p.name, 'user1');
+    assert.deepEqual(A.readLog(), log0);                   // log không đổi
+  });
+});
+
+test('sync: usage chỉ lưu khi cachedUsageUtilization.accountUuid khớp', () => {
+  withEnv(({ dir }) => {
+    setupChosen2(dir);
+    writeLoginFiles(dir, fakeAccount(2), { usage: true });   // file = acc2 = đang chọn
+    assert.deepEqual(A.sync(5000), { updated: 'acc-2' });
+    assert.equal(A.loadProfile('acc-2').usage.accountUuid, 'acc-2');
+    assert.equal(A.loadProfile('acc-2').usage.utilization.five_hour.utilization, 12);
+  });
+  withEnv(({ dir }) => {
+    setupChosen2(dir, { usage: { accountUuid: 'acc-9' } });   // file = acc1, usage của tài khoản khác
+    A.sync(6000);
+    assert.equal(A.loadProfile('acc-1').usage, null);
+    assert.equal(A.loadProfile('acc-2').usage, null);
+  });
+});
+
+test('sync: file là tài khoản khác tài khoản đang chọn -> cập nhật token hồ sơ, đặt conflict, since giữ nguyên', () => {
+  withEnv(({ dir }) => {
+    setupChosen2(dir);
+    editJSON(A.paths().credFile, (o) => { o.claudeAiOauth.refreshToken = 'rt-1b'; });
+    const r = A.sync(5000);
+    assert.deepEqual(r, { updated: 'acc-1', conflict: { fileId: 'acc-1', chosenId: 'acc-2', since: 5000 } });
+    assert.equal(A.loadProfile('acc-1').oauth.refreshToken, 'rt-1b');
+    const l = A.readLog();
+    assert.deepEqual(l.conflict, { fileId: 'acc-1', chosenId: 'acc-2', since: 5000 });
+    assert.equal(l.entries.length, 1);                     // không thêm mục nào
+    const r2 = A.sync(5000 + 60000);
+    assert.deepEqual(r2, { conflict: { fileId: 'acc-1', chosenId: 'acc-2', since: 5000 } });
+    assert.equal(A.readLog().conflict.since, 5000);
+    assert.equal(A.chosenId(A.readLog()), 'acc-2');
+  });
+});
+
+test('sync: conflict đổi sang tài khoản khác trong file -> since mới; file quay về tài khoản đang chọn -> hết conflict', () => {
+  withEnv(({ dir }) => {
+    const { a2 } = setupChosen2(dir);
+    A.saveProfile(profileOf(fakeAccount(3)));
+    A.sync(5000);
+    assert.equal(A.readLog().conflict.since, 5000);
+    writeLoginFiles(dir, fakeAccount(3));
+    assert.deepEqual(A.sync(6000).conflict, { fileId: 'acc-3', chosenId: 'acc-2', since: 6000 });
+    writeLoginFiles(dir, a2);
+    assert.deepEqual(A.sync(7000), {});
+    assert.equal(A.readLog().conflict, null);
+  });
+});
+
+test('sync: sau /logout -> nologin, không tạo hồ sơ, không conflict', () => {
+  withEnv(({ dir }) => {
+    setupChosen2(dir);
+    editJSON(A.paths().credFile, (o) => { delete o.claudeAiOauth; });
+    editJSON(A.paths().claudeJson, (o) => { delete o.oauthAccount; });
+    const log0 = A.readLog();
+    assert.deepEqual(A.sync(5000), { skipped: 'nologin' });
+    assert.deepEqual(A.readLog(), log0);
+    assert.deepEqual(A.listProfiles().map((p) => p.id).sort(), ['acc-1', 'acc-2']);
+  });
+  withEnv(() => {   // chưa có file nào
+    assert.deepEqual(A.sync(5000), { skipped: 'nologin' });
+    assert.deepEqual(A.listProfiles(), []);
+    assert.equal(fs.existsSync(A.paths().logFile), false);
+  });
+});
+
+test('sync: đang bị khoá -> locked, không ghi gì; file hỏng -> format', () => {
+  withEnv(({ dir }) => {
+    setupChosen2(dir);
+    const log0 = readText(A.paths().logFile);
+    const prof0 = profText('acc-1');
+    fs.writeFileSync(A.paths().lockFile, JSON.stringify({ pid: process.pid, t: Date.now() }));
+    assert.deepEqual(A.sync(Date.now()), { skipped: 'locked' });
+    assert.equal(readText(A.paths().logFile), log0);
+    assert.equal(profText('acc-1'), prof0);
+    fs.unlinkSync(A.paths().lockFile);
+    fs.writeFileSync(A.paths().claudeJson, '{hỏng');
+    assert.deepEqual(A.sync(5000), { skipped: 'format' });
+    assert.equal(readText(A.paths().logFile), log0);
+  });
+});
+
+test('sync: log hỏng -> format, không ghi hồ sơ', () => {
+  withEnv(({ dir }) => {
+    writeLoginFiles(dir, fakeAccount(1));
+    fs.writeFileSync(A.paths().logFile, '{hỏng');
+    assert.deepEqual(A.sync(5000), { skipped: 'format' });
+    assert.deepEqual(A.listProfiles(), []);
+  });
+});
+
+test('keep: chèn mục keep tại conflict.since, xoá conflict, chosenId = F', () => {
+  withEnv(({ dir }) => {
+    setupChosen2(dir);
+    A.sync(5000);
+    A.sync(65000);
+    assert.deepEqual(A.keep(90000), { ok: true, id: 'acc-1' });
+    const l = A.readLog();
+    assert.deepEqual(l.entries, [{ t: 100, id: 'acc-2', reason: 'init' }, { t: 5000, id: 'acc-1', reason: 'keep' }]);
+    assert.equal(l.conflict, null);
+    assert.equal(A.chosenId(l), 'acc-1');
+    assert.equal(A.isLocked(), false);
+    assert.deepEqual(A.sync(100000), {});   // hết conflict
+  });
+});
+
+test('keep: có mục muộn hơn since (đổi tay xen giữa) -> kẹp t để chosenId vẫn là F, entries vẫn tăng dần', () => {
+  withEnv(({ dir }) => {
+    setupChosen2(dir);
+    const log = A.readLog();
+    A.addEntry(log, { t: 7000, id: 'acc-2', reason: 'switch' });
+    log.conflict = { fileId: 'acc-1', chosenId: 'acc-2', since: 5000 };
+    A.writeLog(log);
+    A.keep(8000);
+    const l = A.readLog();
+    assert.equal(A.chosenId(l), 'acc-1');
+    assert.deepEqual(l.entries.at(-1), { t: 7000, id: 'acc-1', reason: 'keep' });
+    assert.deepEqual(l.entries.map((e) => e.t), [100, 7000, 7000]);
+    assert.equal(l.conflict, null);
+  });
+});
+
+test('keep: không có conflict -> NOT_FOUND; đang bị khoá -> LOCKED', () => {
+  withEnv(({ dir }) => {
+    setupChosen2(dir);
+    throwsCode(() => A.keep(5000), 'NOT_FOUND');
+    assert.equal(A.isLocked(), false);
+    A.sync(5000);
+    fs.writeFileSync(A.paths().lockFile, JSON.stringify({ pid: process.pid, t: Date.now() }));
+    throwsCode(() => A.keep(Date.now()), 'LOCKED');
+    assert.notEqual(A.readLog().conflict, null);
+  });
+});

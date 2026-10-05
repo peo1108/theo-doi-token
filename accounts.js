@@ -2,7 +2,7 @@
 // bằng cách thay đúng các trường đăng nhập trong file của chính Claude Code
 // (.credentials.json: claudeAiOauth + organizationUuid; .claude.json: oauthAccount).
 //
-// Gồm: đường dẫn, đọc/kiểm tra, hồ sơ, ghi atomic, sao lưu, khoá, dòng thời gian, tìm tiến trình, switchTo.
+// Gồm: đường dẫn, đọc/kiểm tra, hồ sơ, ghi atomic, sao lưu, khoá, dòng thời gian, tìm tiến trình, switchTo, sync/keep.
 // Không bao giờ ghi accessToken/refreshToken ra log hay API (xem publicView).
 
 const fs = require('fs');
@@ -410,6 +410,9 @@ function addEntry(log, entry) {
 // id của tài khoản đang được chọn = mục cuối.
 const chosenId = (log) => (log.entries.length ? log.entries[log.entries.length - 1].id : null);
 
+// Thời điểm cho mục mới để nó luôn là mục cuối (chosenId trả về nó): không nhỏ hơn t của mục cuối hiện có.
+const lastT = (log, t) => (log.entries.length ? Math.max(t, log.entries[log.entries.length - 1].t) : t);
+
 // ---------- tìm tiến trình Claude Code đang chạy ----------
 
 const DESKTOP_APP_RE = /[\\/]windowsapps[\\/]|[\\/]anthropicclaude[\\/]|\.app[\\/]contents[\\/]/i;   // ứng dụng Claude desktop
@@ -429,7 +432,9 @@ function isClaudeCodeProcess({ name, path: exePath, cmd } = {}) {
   const n = String(name || '').toLowerCase();
   const command = String(cmd || '');
   if (n === 'claude.exe' || n === 'claude') {
-    if (DESKTOP_APP_RE.test(exePath || firstToken(command))) return false;   // ExecutablePath có thể null
+    // ExecutablePath có thể null; command line không đặt trong dấu nháy thì đường dẫn có khoảng trắng bị cắt bởi firstToken,
+    // nên thử trên cả chuỗi.
+    if (DESKTOP_APP_RE.test(exePath || command)) return false;
     return !/\s--type=/.test(command);
   }
   return RUNTIMES.has(n) && NPM_CLI_RE.test(command);
@@ -494,17 +499,34 @@ function switchTo(query, { now = Date.now(), processes, write = writeLogin } = {
     const login = readLogin();                                    // bước 2 (ném FORMAT nếu lạ)
     const target = resolve(query, listProfiles());
     snapshot(login, now);                                         // bước 3
+    const asWriteFailed = (e, msg) => (e instanceof AccountError && e.code === 'WRITE_FAILED'
+      ? e : new AccountError('WRITE_FAILED', `${msg}: ${e.message}`, { cause: e }));
+    const scan = () => {                                          // bước 5 (chỉ cảnh báo, không chặn)
+      let procs;
+      try { procs = findProcs(); } catch { procs = null; }
+      const checked = !!(procs && procs.ok);
+      return { checked, running: checked && Array.isArray(procs.list) ? procs.list : [] };
+    };
+    const logSwitch = (log, running, checked) => {                // bước 9
+      addEntry(log, { t: lastT(log, now), id: target.id, reason: 'switch', ...(checked ? { running: running.length } : {}) });
+      log.conflict = null;
+      writeLog(log);
+    };
     if (login.id === target.id) {                                 // bước 4
-      return { ok: true, from: login.id, to: target.id, already: true, running: [], checked: false };
+      const log = readLog();
+      if (chosenId(log) === target.id) {
+        return { ok: true, from: login.id, to: target.id, already: true, running: [], checked: false };
+      }
+      // File đã là đích nhưng đang chọn tài khoản khác (vd. đang có conflict): chỉ ghi lại lựa chọn, không đụng file đăng nhập.
+      const { checked, running } = scan();
+      try { logSwitch(log, running, checked); } catch (e) { throw asWriteFailed(e, 'Không ghi được dòng thời gian'); }
+      return { ok: true, from: login.id, to: target.id, already: true, running, checked };
     }
     const o = target.oauth;
     if (!isObj(o) || !isStr(o.accessToken) || !isStr(o.refreshToken)) {
       throw new AccountError('NO_TOKEN', `Hồ sơ "${target.name}" không có token đăng nhập, hãy /login lại rồi lưu`);
     }
-    let procs;                                                    // bước 5 (chỉ cảnh báo, không chặn)
-    try { procs = findProcs(); } catch { procs = null; }
-    const checked = !!(procs && procs.ok);
-    const running = checked && Array.isArray(procs.list) ? procs.list : [];
+    const { checked, running } = scan();
 
     const prefix = backup(now);                                   // bước 6
     // Trả hai file về bản trước khi đổi rồi ném lỗi gốc (restore lỗi thì ném lỗi của restore).
@@ -514,9 +536,6 @@ function switchTo(query, { now = Date.now(), processes, write = writeLogin } = {
       }
       throw cause;
     };
-    const asWriteFailed = (e, msg) => (e instanceof AccountError && e.code === 'WRITE_FAILED'
-      ? e : new AccountError('WRITE_FAILED', `${msg}: ${e.message}`, { cause: e }));
-
     let lastErr = null;                                           // bước 7-8
     for (let attempt = 1; attempt <= SWITCH_TRIES; attempt++) {
       try {
@@ -529,14 +548,94 @@ function switchTo(query, { now = Date.now(), processes, write = writeLogin } = {
     if (lastErr) rollback(asWriteFailed(lastErr, 'Không đổi được tài khoản'));
 
     try {                                                         // bước 9
-      const log = readLog();
-      addEntry(log, { t: now, id: target.id, reason: 'switch', ...(checked ? { running: running.length } : {}) });
-      log.conflict = null;
-      writeLog(log);
+      logSwitch(readLog(), running, checked);
     } catch (e) {
       rollback(asWriteFailed(e, 'Không ghi được dòng thời gian'));
     }
     return { ok: true, from: login.id, to: target.id, running, checked };   // bước 10 (withLock nhả khoá)
+  }, now);
+}
+
+// ---------- đồng bộ ----------
+
+// Phần của hồ sơ lấy từ file đăng nhập; dùng để biết có gì thay đổi mà cần ghi lại.
+const loginPart = (p) => JSON.stringify({
+  oauth: p.oauth, organizationUuid: p.organizationUuid ?? null, oauthAccount: p.oauthAccount, usage: p.usage ?? null,
+});
+
+// Đồng bộ file đăng nhập của Claude Code với hồ sơ và dòng thời gian (mục 5.3 của spec). Tracker gọi mỗi lần quét.
+// Không lấy khoá (không được chặn đổi tài khoản); đang có khoá thì bỏ qua. Chỉ ghi file hồ sơ và log,
+// đọc lại log ngay trước khi ghi và kiểm tra khoá lần nữa để ít đè lên một lần đổi vừa bắt đầu.
+// -> { skipped?: 'locked'|'format'|'nologin', added?: id, updated?: id, conflict?: { fileId, chosenId, since } }
+function sync(now = Date.now()) {
+  if (isLocked(now)) return { skipped: 'locked' };
+  let login;
+  let log;
+  try {
+    login = readLogin();
+    if (!login.id) return { skipped: 'nologin' };   // chưa đăng nhập hoặc vừa /logout: không có gì để lưu
+    log = readLog();
+  } catch (e) {
+    if (e instanceof AccountError && e.code === 'FORMAT') return { skipped: 'format' };
+    throw e;
+  }
+  const id = login.id;                               // F: tài khoản trong file
+  const existing = loadProfile(id);
+  const next = profileFromLogin(
+    login,
+    existing ?? { name: uniqueName(defaultName(login.cfg.oauthAccount.emailAddress), listProfiles()) },
+    now,
+  );
+  const profileChanged = !existing || loginPart(existing) !== loginPart(next);
+
+  // Cập nhật log theo F và tài khoản đang chọn I; trả true nếu log có thay đổi.
+  const applyLog = (l) => {
+    const cur = chosenId(l);                         // I
+    if (cur === null) {                              // lần đầu: chưa chọn tài khoản nào
+      addEntry(l, { t: 0, id, reason: 'init' });
+      l.conflict = null;
+      return true;
+    }
+    if (cur === id) {                                // F === I: nếu còn conflict cũ thì đã hết
+      if (!l.conflict) return false;
+      l.conflict = null;
+      return true;
+    }
+    if (!existing) {                                 // F là tài khoản mới đăng nhập: chọn luôn
+      addEntry(l, { t: lastT(l, now), id, reason: 'login' });
+      l.conflict = null;
+      return true;
+    }
+    const c = l.conflict;                            // F !== I, F đã có hồ sơ: ghi nhận conflict, giữ since cũ
+    if (c && c.fileId === id && c.chosenId === cur) return false;
+    l.conflict = { fileId: id, chosenId: cur, since: now };
+    return true;
+  };
+
+  const report = (l, base) => (l.conflict && l.conflict.fileId === id ? { ...base, conflict: l.conflict } : base);
+  if (!profileChanged && !applyLog(structuredClone(log))) return report(log, {});   // không có gì để ghi
+  if (isLocked(now)) return { skipped: 'locked' };   // có lần đổi vừa bắt đầu: để lần quét sau
+  const fresh = readLog();
+  if (applyLog(fresh)) writeLog(fresh);              // log trước, hồ sơ sau: hồ sơ thiếu thì lần sau tự tạo lại
+  if (profileChanged) saveProfile(next);
+
+  return report(fresh, existing ? (profileChanged ? { updated: id } : {}) : { added: id });
+}
+
+// "Giữ F": chấp nhận tài khoản trong file là tài khoản đang chọn, tính từ lúc bắt đầu conflict.
+// Mục keep chèn tại conflict.since; nếu sau đó đã có mục muộn hơn của tài khoản khác thì kẹp t lên mục cuối
+// để chosenId vẫn là F. -> { ok: true, id }
+function keep(now = Date.now()) {
+  return withLock(() => {
+    const log = readLog();
+    const c = log.conflict;
+    if (!c || !isStr(c.fileId) || !Number.isFinite(c.since)) throw new AccountError('NOT_FOUND', 'Không có xung đột tài khoản nào cần xử lý');
+    const last = log.entries[log.entries.length - 1];
+    const t = last && last.t > c.since && last.id !== c.fileId ? last.t : c.since;
+    addEntry(log, { t, id: c.fileId, reason: 'keep' });
+    log.conflict = null;
+    writeLog(log);
+    return { ok: true, id: c.fileId };
   }, now);
 }
 
@@ -547,7 +646,7 @@ module.exports = {
   withLock, isLocked, publicView,
   readLog, writeLog, addEntry, chosenId,
   isClaudeCodeProcess, findClaudeProcesses, parseWindowsProcesses, parsePsProcesses,
-  snapshot, switchTo,
+  snapshot, switchTo, sync, keep,
 };
 
-// (Đồng bộ và khối CLI sẽ được thêm ở các task sau.)
+// (Khối CLI sẽ được thêm ở task sau.)
