@@ -743,15 +743,17 @@ test('ảnh Claude xem trong lịch sử (Read, ảnh dán VS Code): chỉ giữ
   assert.ok(!JSON.stringify(evs).includes(JPG), 'sự kiện chỉ mang tên ảnh, không mang dữ liệu');
   const [u, bad, url] = evs.filter((e) => e.kind === 'user');
   assert.equal(u.text, 'lỗi ở đây');
-  assert.match(u.images[0].name, /^l-\d+-\d+-0\.jpg$/);
+  assert.match(u.images[0].name, /^l-[0-9a-f]{8}-\d+-\d+-0\.jpg$/);
   assert.deepEqual([bad.text, bad.images, url.text, url.images], ['[ảnh]', undefined, '[ảnh]', undefined]);
   const r1 = evs.find((e) => e.kind === 'tool_result');
   assert.equal(r1.images.length, 1);
-  assert.match(r1.images[0].name, /^l-\d+-\d+-1\.jpg$/);
+  assert.match(r1.images[0].name, /^l-[0-9a-f]{8}-\d+-\d+-1\.jpg$/);
   assert.ok(!fs.existsSync(path.join(env.dataDir, 'uploads', id)), 'nạp lịch sử không ghi file ảnh');
   assert.deepEqual(await R.call(hub, 'sessions.image', { id, name: u.images[0].name }), { mime: 'image/jpeg', data: JPG });
   assert.deepEqual(await R.call(hub, 'sessions.image', { id, name: r1.images[0].name }), { mime: 'image/jpeg', data: JPG });
-  for (const name of ['l-0-10-0.png', 'l-999999-5-0.png', r1.images[0].name.replace(/-1\.jpg$/, '-0.jpg'), 'c-../x.png']) {
+  const ep = /^l-([0-9a-f]{8})-/.exec(u.images[0].name)[1];
+  for (const name of [`l-${ep}-0-10-0.png`, `l-${ep}-999999-5-0.png`, `l-${ep}-0-255999999-0.png`, 'l-0-10-0.png',
+    r1.images[0].name.replace(/-1\.jpg$/, '-0.jpg'), r1.images[0].name.replace(ep, ep === '00000000' ? '11111111' : '00000000'), 'c-../x.png']) {
     await assert.rejects(R.call(hub, 'sessions.image', { id, name }), (e) => e.code === 'NOT_FOUND', name);
   }
 
@@ -761,6 +763,20 @@ test('ảnh Claude xem trong lịch sử (Read, ảnh dán VS Code): chỉ giữ
   s.tail();
   const r2 = s.events.find((e) => e.kind === 'tool_result' && e.id === 'r2');
   assert.deepEqual(await R.call(hub, 'sessions.image', { id, name: r2.images[0].name }), { mime: 'image/png', data: PNG });
+
+  // nạp lại lúc dòng ảnh đang ghi dở: dòng đó không mất, không lặp — tail đọc tiếp khi ghi xong; tên cũ hết hiệu lực
+  const half = lines([{ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'r3', content: [block(JPG, 'image/jpeg')] }] } }]);
+  fs.appendFileSync(file, half.slice(0, 60));
+  s.loadTranscript(true);
+  await assert.rejects(R.call(hub, 'sessions.image', { id, name: r2.images[0].name }), (e) => e.code === 'NOT_FOUND');
+  assert.ok(!s.events.some((e) => e.id === 'r3'));
+  fs.appendFileSync(file, half.slice(60));
+  s.tail();
+  const r3 = s.events.filter((e) => e.kind === 'tool_result' && e.id === 'r3');
+  assert.equal(r3.length, 1);
+  assert.deepEqual(await R.call(hub, 'sessions.image', { id, name: r3[0].images[0].name }), { mime: 'image/jpeg', data: JPG });
+  s.tail();
+  assert.equal(s.events.filter((e) => e.id === 'r3').length, 1);
 });
 
 test('ảnh Claude xem trong phiên claude -p: một file theo nội dung, không để file tạm; dọn ảnh chừa phiên còn trong bộ nhớ', async () => {
@@ -785,6 +801,24 @@ test('ảnh Claude xem trong phiên claude -p: một file theo nội dung, khôn
   fs.utimesSync(up, old, old);
   hub.sweep();
   assert.ok(fs.existsSync(up), 'phiên còn trong bộ nhớ -> không dọn');
+});
+
+test('ghi ảnh: Windows báo EPERM khi đổi tên -> thử lại; vẫn lỗi thì ghi thẳng, không để file tạm', async () => {
+  const s = await R.call(hub, 'sessions.create', { cwd: WORK, text: 'mở' });
+  await watch(s.id, has('result'));
+  const real = fs.renameSync;
+  let fails = 2;
+  fs.renameSync = (a, b) => { if (fails-- > 0) throw Object.assign(new Error('busy'), { code: 'EPERM' }); return real(a, b); };
+  try {
+    await R.call(hub, 'sessions.send', { id: s.id, text: 'a', images: [img()] });
+    fails = 99;
+    await R.call(hub, 'sessions.send', { id: s.id, text: 'b', images: [img(JPG, 'image/jpeg', 'b.jpg')] });
+  } finally { fs.renameSync = real; }
+  const up = path.join(env.dataDir, 'uploads', s.id);
+  const byExt = Object.fromEntries(fs.readdirSync(up).map((f) => [path.extname(f), f]));
+  assert.deepEqual(Object.keys(byExt).sort(), ['.jpg', '.png']);
+  assert.deepEqual(fs.readFileSync(path.join(up, byExt['.jpg'])), Buffer.from(JPG, 'base64'));
+  assert.deepEqual(fs.readFileSync(path.join(up, byExt['.png'])), Buffer.from(PNG, 'base64'));
 });
 
 test('dọn ảnh cũ hơn 7 ngày trong data/uploads', () => {

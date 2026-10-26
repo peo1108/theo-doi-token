@@ -103,6 +103,7 @@ struct AttachmentStrip: View {
 
 /// Ảnh lấy từ máy tính (sessions.image). Giữ dữ liệu nén và ảnh thu nhỏ, mỗi loại tối đa 40 MB;
 /// ảnh cỡ gốc chỉ giải mã khi mở xem. Nhiều nơi cùng hỏi một ảnh thì chỉ tải một lần.
+/// Phần giải mã nặng (base64 vài MB, thu nhỏ, bung ảnh gốc) chạy ngoài luồng chính -> cuộn không giật.
 @MainActor
 enum RemoteImages {
     private static let blobs: NSCache<NSString, NSData> = {
@@ -123,7 +124,8 @@ enum RemoteImages {
         if let t = inflight[key] { return await t.value }
         let t = Task<Data?, Never> {
             guard let r: ImageData = try? await api.call("POST", "/v1/sessions/\(sessionId)/image", body: ["name": name]) else { return nil }
-            return Data(base64Encoded: r.data)
+            let b64 = r.data
+            return await Task.detached(priority: .userInitiated) { Data(base64Encoded: b64) }.value
         }
         inflight[key] = t
         let d = await t.value
@@ -136,25 +138,38 @@ enum RemoteImages {
         "\(sessionId)/\(name)@\(Int(maxPixel))" as NSString
     }
 
+    private static func cost(_ img: UIImage) -> Int {
+        Int(img.size.width * img.scale * img.size.height * img.scale) * 4
+    }
+
     static func cachedThumb(_ sessionId: String, _ name: String, maxPixel: CGFloat) -> UIImage? {
         thumbs.object(forKey: thumbKey(sessionId, name, maxPixel))
+    }
+
+    /// Ảnh nhỏ có sẵn trong sự kiện (điện thoại gửi): giải mã một lần rồi nhớ, không giải mã lại mỗi lần vẽ.
+    static func inlineThumb(_ sessionId: String, _ name: String, base64: String) -> UIImage? {
+        let key = thumbKey(sessionId, name, 0)
+        if let img = thumbs.object(forKey: key) { return img }
+        guard let img = ImagePrep.image(base64: base64) else { return nil }
+        thumbs.setObject(img, forKey: key, cost: cost(img))
+        return img
     }
 
     /// Ảnh thu nhỏ (cạnh dài ≤ maxPixel px), giải mã thẳng ở cỡ nhỏ -> không bung cả bitmap gốc.
     static func thumb(_ api: APIClient, _ sessionId: String, _ name: String, maxPixel: CGFloat) async -> UIImage? {
         if let img = cachedThumb(sessionId, name, maxPixel: maxPixel) { return img }
-        guard let d = await data(api, sessionId, name), let img = downsample(d, maxPixel: maxPixel) else { return nil }
-        let px = img.size.width * img.scale * img.size.height * img.scale
-        thumbs.setObject(img, forKey: thumbKey(sessionId, name, maxPixel), cost: Int(px) * 4)
+        guard let d = await data(api, sessionId, name) else { return nil }
+        guard let img = await Task.detached(priority: .userInitiated, operation: { downsample(d, maxPixel: maxPixel) }).value else { return nil }
+        thumbs.setObject(img, forKey: thumbKey(sessionId, name, maxPixel), cost: cost(img))
         return img
     }
 
     static func full(_ api: APIClient, _ sessionId: String, _ name: String) async -> UIImage? {
         guard let d = await data(api, sessionId, name) else { return nil }
-        return UIImage(data: d)
+        return await Task.detached(priority: .userInitiated) { UIImage(data: d)?.preparingForDisplay() }.value
     }
 
-    private static func downsample(_ data: Data, maxPixel: CGFloat) -> UIImage? {
+    nonisolated private static func downsample(_ data: Data, maxPixel: CGFloat) -> UIImage? {
         guard let src = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -211,9 +226,10 @@ struct EventImages: View {
                         Task { await open(im) }
                     } label: {
                         if let t = im.thumb {
-                            ImageTile(image: ImagePrep.image(base64: t), width: 72, height: 72)
+                            ImageTile(image: RemoteImages.inlineThumb(sessionId, im.name, base64: t), width: 72, height: 72)
                         } else {
-                            RemoteImageTile(name: im.name, sessionId: sessionId, large: large)
+                            // hàng có thể được dùng lại cho sự kiện khác (nạp lại lịch sử) -> đổi tên là ô mới, không giữ ảnh cũ
+                            RemoteImageTile(name: im.name, sessionId: sessionId, large: large).id(im.name)
                         }
                     }
                     .buttonStyle(.plain)
@@ -248,17 +264,21 @@ private struct RemoteImageTile: View {
     @State private var failed = false
 
     private var maxPixel: CGFloat { large ? 600 : 216 }
+    /// nối được hub và máy tính đang online; đổi thì task chạy lại -> ô lỗi tự tải lại khi có mạng trở lại
+    private var reachable: Bool { app.api != nil && app.hub?.connected == true && app.currentMachine?.online != false }
 
     var body: some View {
         let shown = img ?? RemoteImages.cachedThumb(sessionId, name, maxPixel: maxPixel)
         // ô lớn cao cố định 140, tải xong chỉ đổi chiều rộng -> danh sách không bị đẩy lên xuống
         let w: CGFloat = large ? shown.map { min(max(140 * $0.size.width / max($0.size.height, 1), 60), 260) } ?? 140 : 72
         ImageTile(image: shown, loading: !failed, width: w, height: large ? 140 : 72)
-            // chạy lại khi có kết nối (app.api từ nil thành có)
-            .task(id: "\(name)|\(app.api != nil)") {
-                guard img == nil, let api = app.api else { return }
-                img = await RemoteImages.thumb(api, sessionId, name, maxPixel: maxPixel)
-                failed = img == nil
+            .task(id: reachable) {
+                guard img == nil, reachable, let api = app.api else { return }
+                failed = false
+                let r = await RemoteImages.thumb(api, sessionId, name, maxPixel: maxPixel)
+                guard !Task.isCancelled else { return }   // đã cuộn khuất: không giữ ảnh trong @State
+                img = r
+                failed = r == nil
             }
             .onDisappear { img = nil }
     }
