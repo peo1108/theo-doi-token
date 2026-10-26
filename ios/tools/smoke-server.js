@@ -34,7 +34,7 @@ const hub = R.createHub({
   const chat = hub.create({ cwd: work, text: md });
   await new Promise((r) => setTimeout(r, 800));
   chat.send('Liệt kê file trong thư mục');
-  const perm = hub.create({ cwd: work, text: 'PERM tạo file ghi chú' });
+  const perm = hub.create({ cwd: work, text: 'PERM SHOT chụp màn hình trang đăng nhập' });
   const ask = hub.create({ cwd: work, text: 'ASK chọn màu' });
   const limit = hub.create({ cwd: work, text: 'LIMIT' });
   const ponder = hub.create({ cwd: work, text: 'PONDER: thiết kế lại phần đăng nhập' });

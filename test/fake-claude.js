@@ -1,5 +1,5 @@
 // `claude -p --input-format stream-json --output-format stream-json` giả cho test remote.js.
-// Lời nhắn chứa PERM -> xin quyền Write; ASK -> AskUserQuestion; LIMIT -> hết hạn mức; SLOW -> chờ tới khi bị ngắt;
+// Lời nhắn chứa PERM -> xin quyền Write; ASK -> AskUserQuestion; SEEIMG -> Read ảnh; LIMIT -> hết hạn mức; SLOW -> chờ tới khi bị ngắt;
 // còn lại -> trả lời "echo: <lời nhắn>". Ghi tham số dòng lệnh vào FAKE_ARGS_FILE, lịch sử vào CLAUDE_PROJECTS_DIR.
 
 const fs = require('fs');
@@ -34,20 +34,34 @@ function onUser(text) {
     result({ total_cost_usd: 0 });
   } else if (text.includes('PERM') || text.includes('ASK')) {
     const ask = text.includes('ASK');
-    const tool = ask ? 'AskUserQuestion' : 'Write';
+    const shot = text.includes('SHOT');   // tool chụp màn hình phải duyệt quyền, kết quả là ảnh thật (icon app)
+    const tool = ask ? 'AskUserQuestion' : shot ? 'mcp__browser__screenshot' : 'Write';
     const input = ask
       ? { questions: [{ question: 'Màu gì?', header: 'Màu', multiSelect: false, options: [{ label: 'Đỏ', description: '' }, { label: 'Xanh', description: '' }] }] }
-      : { file_path: 'C:\\x\\a.txt', content: 'hi' };
+      : shot ? { fullPage: false } : { file_path: 'C:\\x\\a.txt', content: 'hi' };
+    const okContent = shot
+      ? [{ type: 'image', source: { type: 'base64', media_type: 'image/png',
+        data: fs.readFileSync(path.join(__dirname, '..', 'ios', 'CCRemote', 'Assets.xcassets', 'AppIcon.appiconset', 'icon.png')).toString('base64') } }]
+      : 'ok';
     const id = `tu-${++n}`;
     out({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: tool, input }] }, parent_tool_use_id: null });
     const rid = `req-${n}`;
     waiting.set(rid, (resp) => {
       const ok = resp.behavior === 'allow';
-      out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: !ok, content: ok ? 'ok' : resp.message }] }, parent_tool_use_id: null });
+      out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: !ok, content: ok ? okContent : resp.message }] }, parent_tool_use_id: null });
       say(ok ? `allowed ${JSON.stringify(resp.updatedInput.answers || null)} perms=${(resp.updatedPermissions || []).length}` : 'denied');
       result();
     });
     out({ type: 'control_request', request_id: rid, request: { subtype: 'can_use_tool', tool_name: tool, input, tool_use_id: id, permission_suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] } });
+  } else if (text.includes('SEEIMG')) {
+    // Claude xem cùng một ảnh hai lần (Read) -> remote.js lưu một file c-<sha1>
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 9)]).toString('base64');
+    for (const id of ['img-1', 'img-2']) {
+      out({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: 'C:\\x\\a.png' } }] }, parent_tool_use_id: null });
+      out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } }] }] }, parent_tool_use_id: null });
+    }
+    say('đã xem ảnh');
+    result();
   } else if (text.includes('LIMIT')) {
     out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1900000000, rateLimitType: 'five_hour', unifiedWindows: { five_hour: { utilization: 1, resetsAt: 1900000000 }, seven_day: { utilization: 0.5 } } } });
     result({ is_error: true, subtype: 'error', result: 'Claude AI usage limit reached' });

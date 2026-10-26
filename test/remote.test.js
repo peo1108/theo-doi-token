@@ -720,35 +720,71 @@ test('ảnh vào phiên VS Code (hook): lưu file, tin chèn vào có đường 
   assert.deepEqual(fs.readFileSync(paths[0]), Buffer.from(PNG, 'base64'));
 });
 
-test('ảnh Claude xem trên máy (Read, ảnh dán trong VS Code): lưu theo nội dung, app lấy bằng sessions.image', async () => {
+test('ảnh Claude xem trong lịch sử (Read, ảnh dán VS Code): chỉ giữ chỗ, app hỏi mới đọc lại đúng dòng trong file', async () => {
   const id = 'abcdef00-5555-6666-7777-888888888888';
   const dir = path.join(PROJECTS, 'pc-img');
   fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${id}.jsonl`);
   const block = (data, mime = 'image/png') => ({ type: 'image', source: { type: 'base64', media_type: mime, data } });
   const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString('base64');
   const t = new Date().toISOString();
-  fs.writeFileSync(path.join(dir, `${id}.jsonl`), [
+  const lines = (xs) => xs.map((x) => JSON.stringify({ ...x, sessionId: id, timestamp: t })).join('\n') + '\n';
+  fs.writeFileSync(file, lines([
     { type: 'user', cwd: WORK, message: { content: [{ type: 'text', text: '<ide_opened_file>a</ide_opened_file>' }, block(JPG, 'image/jpeg'), { type: 'text', text: 'lỗi ở đây' }] } },
     { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: 'C:/a.png' } }] } },
-    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'r1', content: [block(PNG), { type: 'text', text: 'kèm chữ' }] }] } },
-    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'r2', content: [block(PNG)] }] } },
-    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'r3', content: [block(svg)] }] } },
-  ].map((x) => JSON.stringify({ ...x, sessionId: id, timestamp: t })).join('\n') + '\n');
+    // ảnh hỏng bị bỏ nhưng vẫn giữ thứ tự; JPEG khai nhầm là PNG -> nhận theo chữ ký
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'r1', content: [block(svg), block(JPG, 'image/png'), { type: 'text', text: 'kèm chữ' }] }] } },
+    { type: 'user', message: { content: [block(svg)] } },
+    { type: 'user', message: { content: [{ type: 'image', source: { type: 'url', url: 'https://x/a.png' } }] } },
+  ]));
 
   await R.call(hub, 'sessions.get', { id });
-  const evs = await watch(id, (e) => e.filter((x) => x.kind === 'tool_result').length === 3);
-  assert.ok(!JSON.stringify(evs).includes(PNG), 'sự kiện chỉ mang tên ảnh, không mang dữ liệu');
-  const u = evs.find((e) => e.kind === 'user');
+  const evs = await watch(id, (e) => e.filter((x) => x.kind === 'user').length === 3);
+  assert.ok(!JSON.stringify(evs).includes(JPG), 'sự kiện chỉ mang tên ảnh, không mang dữ liệu');
+  const [u, bad, url] = evs.filter((e) => e.kind === 'user');
   assert.equal(u.text, 'lỗi ở đây');
-  assert.match(u.images[0].name, /^c-[0-9a-f]{16}\.jpg$/);
-  const [r1, r2, r3] = evs.filter((e) => e.kind === 'tool_result');
-  assert.match(r1.images[0].name, /^c-[0-9a-f]{16}\.png$/);
-  assert.equal(r2.images[0].name, r1.images[0].name);
-  assert.equal(r3.images, undefined);
-  assert.equal(fs.readdirSync(path.join(env.dataDir, 'uploads', id)).length, 2);
-  assert.deepEqual(await R.call(hub, 'sessions.image', { id, name: r1.images[0].name }), { mime: 'image/png', data: PNG });
+  assert.match(u.images[0].name, /^l-\d+-\d+-0\.jpg$/);
+  assert.deepEqual([bad.text, bad.images, url.text, url.images], ['[ảnh]', undefined, '[ảnh]', undefined]);
+  const r1 = evs.find((e) => e.kind === 'tool_result');
+  assert.equal(r1.images.length, 1);
+  assert.match(r1.images[0].name, /^l-\d+-\d+-1\.jpg$/);
+  assert.ok(!fs.existsSync(path.join(env.dataDir, 'uploads', id)), 'nạp lịch sử không ghi file ảnh');
   assert.deepEqual(await R.call(hub, 'sessions.image', { id, name: u.images[0].name }), { mime: 'image/jpeg', data: JPG });
-  await assert.rejects(R.call(hub, 'sessions.image', { id, name: 'c-../x.png' }), (e) => e.code === 'NOT_FOUND');
+  assert.deepEqual(await R.call(hub, 'sessions.image', { id, name: r1.images[0].name }), { mime: 'image/jpeg', data: JPG });
+  for (const name of ['l-0-10-0.png', 'l-999999-5-0.png', r1.images[0].name.replace(/-1\.jpg$/, '-0.jpg'), 'c-../x.png']) {
+    await assert.rejects(R.call(hub, 'sessions.image', { id, name }), (e) => e.code === 'NOT_FOUND', name);
+  }
+
+  // dòng ghi thêm khi phiên VS Code đang chạy -> tail cũng giữ chỗ đúng vị trí trong file
+  fs.appendFileSync(file, lines([{ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'r2', content: [block(PNG)] }] } }]));
+  const s = hub.get(id, { load: false });
+  s.tail();
+  const r2 = s.events.find((e) => e.kind === 'tool_result' && e.id === 'r2');
+  assert.deepEqual(await R.call(hub, 'sessions.image', { id, name: r2.images[0].name }), { mime: 'image/png', data: PNG });
+});
+
+test('ảnh Claude xem trong phiên claude -p: một file theo nội dung, không để file tạm; dọn ảnh chừa phiên còn trong bộ nhớ', async () => {
+  const s = await R.call(hub, 'sessions.create', { cwd: WORK, text: 'SEEIMG' });
+  const evs = await watch(s.id, has('result'));
+  const rs = evs.filter((e) => e.kind === 'tool_result');
+  assert.equal(rs.length, 2);
+  assert.match(rs[0].images[0].name, /^c-[0-9a-f]{16}\.png$/);
+  assert.equal(rs[1].images[0].name, rs[0].images[0].name);
+  const up = path.join(env.dataDir, 'uploads', s.id);
+  assert.deepEqual(fs.readdirSync(up), [rs[0].images[0].name]);
+  assert.equal((await R.call(hub, 'sessions.image', { id: s.id, name: rs[0].images[0].name })).mime, 'image/png');
+
+  // tool chụp màn hình phải duyệt quyền: app ẩn dòng tool, ảnh hiện theo toolUseId của thẻ quyền
+  await R.call(hub, 'sessions.send', { id: s.id, text: 'PERM SHOT' });
+  const pe = (await watch(s.id, has('permission'))).find((e) => e.kind === 'permission');
+  await R.call(hub, 'sessions.permission', { id: s.id, requestId: pe.requestId, decision: 'allow' });
+  const shot = (await watch(s.id, has('tool_result', (e) => e.id === pe.toolUseId))).find((e) => e.kind === 'tool_result' && e.id === pe.toolUseId);
+  assert.match(shot.images[0].name, /^c-[0-9a-f]{16}\.png$/);
+
+  const old = (Date.now() - 8 * 24 * 3600e3) / 1000;
+  fs.utimesSync(up, old, old);
+  hub.sweep();
+  assert.ok(fs.existsSync(up), 'phiên còn trong bộ nhớ -> không dọn');
 });
 
 test('dọn ảnh cũ hơn 7 ngày trong data/uploads', () => {

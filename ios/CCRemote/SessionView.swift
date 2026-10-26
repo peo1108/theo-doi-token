@@ -293,9 +293,15 @@ struct EventRow: View {
             }
         case "permission":
             TimelineRow(color: .orange) {
-                PermissionCard(event: event, decision: event.requestId.flatMap { model.decisions[$0] }) { decision, answers in
-                    guard let api = app.api, let rid = event.requestId else { return }
-                    Task { await model.decide(rid, decision, answers: answers, api: api) }
+                VStack(alignment: .leading, spacing: 6) {
+                    PermissionCard(event: event, decision: event.requestId.flatMap { model.decisions[$0] }) { decision, answers in
+                        guard let api = app.api, let rid = event.requestId else { return }
+                        Task { await model.decide(rid, decision, answers: answers, api: api) }
+                    }
+                    // tool phải duyệt quyền không có dòng tool riêng (visible ẩn đi) -> ảnh kết quả hiện ở đây
+                    if let imgs = event.toolUseId.flatMap({ model.toolResults[$0] })?.images, !imgs.isEmpty {
+                        EventImages(images: imgs, sessionId: model.id, large: true)
+                    }
                 }
             }
         case "result":
@@ -366,7 +372,7 @@ struct ToolRow: View {
             detail
             // ảnh Claude xem trên máy (Read file ảnh, tool chụp màn hình…)
             if let imgs = result?.images, !imgs.isEmpty {
-                EventImages(images: imgs, sessionId: sessionId)
+                EventImages(images: imgs, sessionId: sessionId, large: true)
             }
         }
     }

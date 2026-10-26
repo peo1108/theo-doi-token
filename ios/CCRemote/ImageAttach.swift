@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import UIKit
+import ImageIO
 
 /// Ảnh đang đính kèm trong ô nhắn (chưa gửi).
 struct PickedImage: Identifiable {
@@ -100,29 +101,103 @@ struct AttachmentStrip: View {
     }
 }
 
-/// Ảnh đầy đủ lấy từ máy tính (sessions.image), nhớ trong bộ nhớ để cuộn qua lại không tải lại.
-enum FullImages {
-    private static let cache = NSCache<NSString, UIImage>()
+/// Ảnh lấy từ máy tính (sessions.image). Giữ dữ liệu nén và ảnh thu nhỏ, mỗi loại tối đa 40 MB;
+/// ảnh cỡ gốc chỉ giải mã khi mở xem. Nhiều nơi cùng hỏi một ảnh thì chỉ tải một lần.
+@MainActor
+enum RemoteImages {
+    private static let blobs: NSCache<NSString, NSData> = {
+        let c = NSCache<NSString, NSData>()
+        c.totalCostLimit = 40 << 20
+        return c
+    }()
+    private static let thumbs: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.totalCostLimit = 40 << 20
+        return c
+    }()
+    private static var inflight: [String: Task<Data?, Never>] = [:]
 
-    static func cached(_ sessionId: String, _ name: String) -> UIImage? {
-        cache.object(forKey: "\(sessionId)/\(name)" as NSString)
+    private static func data(_ api: APIClient, _ sessionId: String, _ name: String) async -> Data? {
+        let key = "\(sessionId)/\(name)"
+        if let d = blobs.object(forKey: key as NSString) { return d as Data }
+        if let t = inflight[key] { return await t.value }
+        let t = Task<Data?, Never> {
+            guard let r: ImageData = try? await api.call("POST", "/v1/sessions/\(sessionId)/image", body: ["name": name]) else { return nil }
+            return Data(base64Encoded: r.data)
+        }
+        inflight[key] = t
+        let d = await t.value
+        inflight[key] = nil
+        if let d { blobs.setObject(d as NSData, forKey: key as NSString, cost: d.count) }
+        return d
     }
 
-    static func load(_ api: APIClient, _ sessionId: String, _ name: String) async -> UIImage? {
-        if let img = cached(sessionId, name) { return img }
-        guard let r: ImageData = try? await api.call("POST", "/v1/sessions/\(sessionId)/image", body: ["name": name]),
-              let img = ImagePrep.image(base64: r.data) else { return nil }
-        cache.setObject(img, forKey: "\(sessionId)/\(name)" as NSString)
+    private static func thumbKey(_ sessionId: String, _ name: String, _ maxPixel: CGFloat) -> NSString {
+        "\(sessionId)/\(name)@\(Int(maxPixel))" as NSString
+    }
+
+    static func cachedThumb(_ sessionId: String, _ name: String, maxPixel: CGFloat) -> UIImage? {
+        thumbs.object(forKey: thumbKey(sessionId, name, maxPixel))
+    }
+
+    /// Ảnh thu nhỏ (cạnh dài ≤ maxPixel px), giải mã thẳng ở cỡ nhỏ -> không bung cả bitmap gốc.
+    static func thumb(_ api: APIClient, _ sessionId: String, _ name: String, maxPixel: CGFloat) async -> UIImage? {
+        if let img = cachedThumb(sessionId, name, maxPixel: maxPixel) { return img }
+        guard let d = await data(api, sessionId, name), let img = downsample(d, maxPixel: maxPixel) else { return nil }
+        let px = img.size.width * img.scale * img.size.height * img.scale
+        thumbs.setObject(img, forKey: thumbKey(sessionId, name, maxPixel), cost: Int(px) * 4)
         return img
+    }
+
+    static func full(_ api: APIClient, _ sessionId: String, _ name: String) async -> UIImage? {
+        guard let d = await data(api, sessionId, name) else { return nil }
+        return UIImage(data: d)
+    }
+
+    private static func downsample(_ data: Data, maxPixel: CGFloat) -> UIImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg)
+    }
+}
+
+/// Khung ô ảnh dùng chung: ảnh phủ kín khung, hoặc vòng quay khi đang tải / biểu tượng ảnh khi lỗi.
+private struct ImageTile: View {
+    let image: UIImage?
+    var loading = false
+    let width: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else if loading {
+                ProgressView()
+            } else {
+                Image(systemName: "photo").foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: width, height: height)
+        .background(Color(.tertiarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
 /// Ảnh trong lời nhắn hoặc kết quả tool; bấm để xem ảnh đầy đủ.
-/// Ảnh gửi từ điện thoại có sẵn ảnh nhỏ; ảnh Claude xem trên máy (Read, chụp màn hình…) thì không
-/// -> tự tải ảnh đầy đủ khi hiện ra và hiện to hơn.
+/// Ảnh gửi từ điện thoại có sẵn ảnh nhỏ; ảnh Claude xem trên máy (Read, chụp màn hình…) và ảnh dán trong VS Code
+/// thì không -> tải khi hiện ra.
 struct EventImages: View {
     let images: [EventImage]
     let sessionId: String
+    /// kết quả tool: ô cao 140 giữ tỉ lệ; lời nhắn: ô vuông 72
+    var large = false
     @Environment(AppModel.self) private var app
     @State private var shown: UIImage?
     @State private var loading = false
@@ -130,14 +205,15 @@ struct EventImages: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(images, id: \.name) { im in
+                // cùng một ảnh có thể xuất hiện hai lần (trùng tên) -> định danh theo vị trí
+                ForEach(Array(images.enumerated()), id: \.offset) { _, im in
                     Button {
                         Task { await open(im) }
                     } label: {
-                        if im.thumb != nil {
-                            tile(ImagePrep.image(base64: im.thumb))
+                        if let t = im.thumb {
+                            ImageTile(image: ImagePrep.image(base64: t), width: 72, height: 72)
                         } else {
-                            PCImageTile(name: im.name, sessionId: sessionId)
+                            RemoteImageTile(name: im.name, sessionId: sessionId, large: large)
                         }
                     }
                     .buttonStyle(.plain)
@@ -153,56 +229,37 @@ struct EventImages: View {
         }
     }
 
-    private func tile(_ img: UIImage?) -> some View {
-        Group {
-            if let img {
-                Image(uiImage: img).resizable().scaledToFill()
-            } else {
-                Image(systemName: "photo").foregroundStyle(.secondary)
-            }
-        }
-        .frame(width: 72, height: 72)
-        .background(Color(.tertiarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
     private func open(_ im: EventImage) async {
         guard let api = app.api else { return }
-        loading = FullImages.cached(sessionId, im.name) == nil
+        loading = true
         defer { loading = false }
-        shown = await FullImages.load(api, sessionId, im.name) ?? ImagePrep.image(base64: im.thumb)
+        shown = await RemoteImages.full(api, sessionId, im.name) ?? ImagePrep.image(base64: im.thumb)
     }
 }
 
-/// Ảnh Claude xem trên máy: tải ảnh đầy đủ khi hiện ra, cao 140, giữ tỉ lệ (rộng tối đa 260).
-private struct PCImageTile: View {
+/// Ảnh chưa có ảnh nhỏ sẵn: tải khi hiện ra, bỏ khỏi @State khi cuộn khuất (ảnh nhỏ vẫn còn trong RemoteImages,
+/// có giới hạn) -> phiên nhiều ảnh chụp màn hình không làm phình bộ nhớ.
+private struct RemoteImageTile: View {
     let name: String
     let sessionId: String
+    let large: Bool
     @Environment(AppModel.self) private var app
     @State private var img: UIImage?
     @State private var failed = false
 
+    private var maxPixel: CGFloat { large ? 600 : 216 }
+
     var body: some View {
-        Group {
-            if let img {
-                // ScrollView ngang không đề xuất chiều rộng -> phải đặt khung cố định, không thì ảnh hiện cỡ gốc
-                let w = min(max(140 * img.size.width / max(img.size.height, 1), 60), 260)
-                Image(uiImage: img).resizable().scaledToFill()
-                    .frame(width: w, height: 140)
-                    .clipped()
-            } else {
-                Group {
-                    if failed { Image(systemName: "photo").foregroundStyle(.secondary) } else { ProgressView() }
-                }
-                .frame(width: 140, height: 100)
+        let shown = img ?? RemoteImages.cachedThumb(sessionId, name, maxPixel: maxPixel)
+        // ô lớn cao cố định 140, tải xong chỉ đổi chiều rộng -> danh sách không bị đẩy lên xuống
+        let w: CGFloat = large ? shown.map { min(max(140 * $0.size.width / max($0.size.height, 1), 60), 260) } ?? 140 : 72
+        ImageTile(image: shown, loading: !failed, width: w, height: large ? 140 : 72)
+            // chạy lại khi có kết nối (app.api từ nil thành có)
+            .task(id: "\(name)|\(app.api != nil)") {
+                guard img == nil, let api = app.api else { return }
+                img = await RemoteImages.thumb(api, sessionId, name, maxPixel: maxPixel)
+                failed = img == nil
             }
-        }
-        .background(Color(.tertiarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .task(id: name) {
-            guard img == nil, let api = app.api else { return }
-            img = await FullImages.load(api, sessionId, name)
-            failed = img == nil
-        }
+            .onDisappear { img = nil }
     }
 }
