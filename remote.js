@@ -12,6 +12,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+const { writeAtomic } = require('./fsutil.js');
 
 const MIN = 60e3;
 const VERSION = 1;
@@ -299,8 +300,9 @@ function readLines(file, maxBytes) {
 
 // Sự kiện của một dòng lịch sử (bắt đầu ở byte `off`, dài `len`). Ảnh chỉ giữ chỗ: l-<epoch>-<off>-<len>-<thứ tự>.<ext>,
 // lúc app hỏi mới đọc lại đúng dòng đó (Session.image) -> nạp lịch sử nhiều ảnh không phải giải mã / ghi file.
-// epoch đổi mỗi lần nạp lại lịch sử -> file bị ghi lại thì tên cũ không trỏ nhầm sang ảnh khác (app cache theo tên).
-function lineEvents(m, off, len, epoch) {
+// epoch (Session.fileEpoch) đổi khi file bị cắt / thay -> tên cũ không trỏ nhầm sang ảnh khác (app cache theo tên).
+// refs nhận `<off>-<len>` của dòng có ảnh -> Session.image chỉ đọc những dòng đã đặt tên.
+function lineEvents(m, off, len, epoch, refs) {
   const evs = normalize(m);
   let n = 0;
   for (const e of evs) {
@@ -308,6 +310,7 @@ function lineEvents(m, off, len, epoch) {
     e.images = e.images.map((x) => {
       const i = n++;
       const t = sniffImage(x.data);
+      if (t && refs) refs.add(`${off}-${len}`);
       return t && { name: `l-${epoch}-${off}-${len}-${i}.${t.ext}` };
     }).filter(Boolean);
   }
@@ -327,15 +330,41 @@ function eachLine(buf, end, fn) {
   }
 }
 
-// -> { events, end }: end = byte ngay sau dòng trọn vẹn cuối cùng; dòng đang ghi dở để tail đọc tiếp từ end.
-function readTranscript(file, { limit = 400, epoch = '' } = {}) {
+// Byte ngay sau dòng trọn vẹn cuối cùng của buf (dòng cuối thiếu \n nhưng đã đủ JSON cũng tính); dòng đang ghi dở để sau.
+function wholeEnd(buf) {
+  const end = buf.lastIndexOf(10) + 1;
+  if (end < buf.length) try { JSON.parse(buf.toString('utf8', end)); return buf.length; } catch {}
+  return end;
+}
+
+// Như wholeEnd cho file dài `size`, nhưng chỉ đọc ngược từ cuối tới dấu xuống dòng gần nhất
+// -> bắt đầu theo dõi file ở đây không cắt ngang dòng đang ghi dở.
+function fileWholeEnd(file, size) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const parts = [];
+    let pos = size;
+    while (pos > 0) {
+      const n = Math.min(64e3, pos);
+      pos -= n;
+      const b = Buffer.alloc(n);
+      fs.readSync(fd, b, 0, n, pos);
+      parts.unshift(b);
+      if (b.includes(10)) break;
+    }
+    return pos + wholeEnd(Buffer.concat(parts));
+  } finally { fs.closeSync(fd); }
+}
+
+// -> { events, end } | null (không đọc được file): end = byte ngay sau dòng trọn vẹn cuối cùng; dòng đang ghi dở để
+// tail đọc tiếp từ end.
+function readTranscript(file, { limit = 400, epoch = '', refs } = {}) {
   let buf;
-  try { buf = fs.readFileSync(file); } catch { return { events: [], end: 0 }; }
-  let end = buf.lastIndexOf(10) + 1;
-  if (end < buf.length) try { JSON.parse(buf.toString('utf8', end)); end = buf.length; } catch {}   // dòng cuối thiếu \n nhưng đã đủ
+  try { buf = fs.readFileSync(file); } catch { return null; }
+  const end = wholeEnd(buf);
   const events = [];
   eachLine(buf, end, (m, off, len) => {
-    for (const e of lineEvents(m, off, len, epoch)) events.push({ ...e, t: Date.parse(m.timestamp) || 0 });
+    for (const e of lineEvents(m, off, len, epoch, refs)) events.push({ ...e, t: Date.parse(m.timestamp) || 0 });
   });
   return { events: events.slice(-limit), end };
 }
@@ -512,38 +541,32 @@ function checkImages(images) {
     const buf = x && IMAGE_TYPES[x.mime] && typeof x.data === 'string' ? Buffer.from(x.data, 'base64') : null;
     const t = imageType(buf);
     if (!t) throw new RemoteError('BAD_IMAGE', 'Tệp đính kèm không phải ảnh JPEG / PNG / GIF / WebP');
-    return { mime: t.mime, data: x.data, buf, ext: t.ext, thumb: typeof x.thumb === 'string' ? x.thumb.slice(0, 400e3) : '' };
+    // ảnh nhỏ quá cỡ thì bỏ hẳn (cắt bớt base64 chỉ ra ảnh hỏng) -> app tự tải ảnh thật
+    return { mime: t.mime, data: x.data, buf, ext: t.ext, thumb: typeof x.thumb === 'string' && x.thumb.length <= 400e3 ? x.thumb : '' };
   });
 }
 
-// Ghi qua file tạm rồi đổi tên: tắt máy giữa chừng không để lại ảnh cụt mang tên thật. Windows hay báo EPERM / EBUSY
-// khi Defender / trình lập chỉ mục đang mở file vừa ghi -> thử lại vài lần, vẫn không được thì xoá file tạm, ghi thẳng.
-function writeAtomic(file, buf) {
-  const tmp = `${file}.${process.pid}.tmp`;
-  try {
-    fs.writeFileSync(tmp, buf);
-    for (let i = 0; ; i++) {
-      try { return fs.renameSync(tmp, file); } catch (err) {
-        if (i >= 4 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (i + 1));
-      }
-    }
-  } catch {
-    try { fs.rmSync(tmp, { force: true }); } catch {}
-    fs.writeFileSync(file, buf);
-  }
+// Ảnh đang chờ đổi tên (Windows khoá file vừa ghi, writeAtomic thử lại ở nền): file -> dữ liệu.
+// Trong lúc chờ readUpload lấy từ đây, saveSeenImages không ghi trùng.
+const writing = new Map();
+
+// Ghi ảnh qua fsutil.writeAtomic: lỗi ghi ném ngay; đổi tên phải thử lại thì chạy nền, hỏng hẳn -> onFail(err).
+function saveImage(file, buf, onFail) {
+  const later = writeAtomic(file, buf);
+  if (!later) return;
+  writing.set(file, buf);
+  later.then(() => writing.delete(file), (err) => { writing.delete(file); onFail(err); });
 }
 
 // Lưu vào data/uploads/<phiên>/<thời gian>-<n>.<ext> (để phiên hook đọc được và để xem lại ảnh đầy đủ).
-function saveUploads(sid, imgs) {
+function saveUploads(sid, imgs, onFail) {
   if (!imgs.length) return [];
   const dir = uploadsDir(sid);
-  fs.mkdirSync(dir, { recursive: true });
   const stamp = Date.now();
   return imgs.map((x, i) => {
     const name = `${stamp}-${i + 1}.${x.ext}`;
     const file = path.join(dir, name);
-    writeAtomic(file, x.buf);
+    saveImage(file, x.buf, onFail);
     return { ...x, name, file };
   });
 }
@@ -560,9 +583,8 @@ function saveSeenImages(sid, images) {
     const name = `c-${crypto.createHash('sha1').update(x.data).digest('hex').slice(0, 16)}.${t.ext}`;
     const file = path.join(dir, name);
     try {
-      if (!fs.existsSync(file)) {
-        fs.mkdirSync(dir, { recursive: true });
-        writeAtomic(file, Buffer.from(x.data, 'base64'));
+      if (!writing.has(file) && !fs.existsSync(file)) {
+        saveImage(file, Buffer.from(x.data, 'base64'), (err) => console.error('remote: không lưu được ảnh', name, err.message));
       }
       out.push({ name });
     } catch {}
@@ -575,12 +597,13 @@ function readUpload(sid, name) {
   const n = String(name || '');
   const t = Object.entries(IMAGE_TYPES).find(([, v]) => n.endsWith(`.${v.ext}`));
   if (!/^(\d+-\d+|c-[0-9a-f]{16})\.[a-z]+$/.test(n) || !t) throw noImage();
-  try { return { mime: t[0], data: fs.readFileSync(path.join(uploadsDir(sid), n)).toString('base64') }; }
+  const file = path.join(uploadsDir(sid), n);
+  try { return { mime: t[0], data: (writing.get(file) || fs.readFileSync(file)).toString('base64') }; }
   catch { throw noImage(); }
 }
 
-// Ảnh của dòng [off, off + len) trong file lịch sử, cùng thứ tự với lineEvents. Kiểm tra kích thước file trước khi cấp
-// bộ nhớ -> tên ảnh bịa / cũ trỏ ra ngoài file không bắt cấp phát cả trăm MB.
+// Ảnh của dòng [off, off + len) trong file lịch sử, cùng thứ tự với lineEvents. Session.image chỉ hỏi dòng nó đã đặt
+// tên; vẫn kiểm tra kích thước file trước khi cấp bộ nhớ phòng file vừa bị cắt.
 const MAX_LINE = 256e6;
 function transcriptLineImages(file, off, len) {
   if (!file || !(len > 0 && len <= MAX_LINE)) throw noImage();
@@ -595,14 +618,21 @@ function transcriptLineImages(file, off, len) {
   } catch { throw noImage(); }
 }
 
-// Xoá thư mục ảnh của phiên không đổi trong 7 ngày, trừ phiên còn trong bộ nhớ (sự kiện của nó còn trỏ tới ảnh).
+// Xoá thư mục ảnh của phiên không đổi trong 7 ngày, trừ phiên còn trong bộ nhớ (sự kiện của nó còn trỏ tới ảnh);
+// file tạm sót lại (Windows khoá cả lúc xoá) cũ hơn 1 giờ thì xoá.
 function sweepUploads(now = Date.now(), keep = new Set()) {
   let dirs = [];
   try { dirs = fs.readdirSync(uploadsDir(), { withFileTypes: true }); } catch { return; }
   for (const d of dirs) {
-    if (!d.isDirectory() || keep.has(d.name)) continue;
+    if (!d.isDirectory()) continue;
     const p = path.join(uploadsDir(), d.name);
-    try { if (now - fs.statSync(p).mtimeMs > UPLOAD_KEEP_MS) fs.rmSync(p, { recursive: true, force: true }); } catch {}
+    try {
+      if (!keep.has(d.name) && now - fs.statSync(p).mtimeMs > UPLOAD_KEEP_MS) { fs.rmSync(p, { recursive: true, force: true }); continue; }
+      for (const n of fs.readdirSync(p)) {
+        const f = path.join(p, n);
+        if (n.endsWith('.tmp')) try { if (now - fs.statSync(f).mtimeMs > 60 * MIN) fs.rmSync(f, { force: true }); } catch {}
+      }
+    } catch {}
   }
 }
 
@@ -611,6 +641,10 @@ function killTree(proc) {
   if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { windowsHide: true });
   else try { proc.kill('SIGTERM'); } catch {}
 }
+
+const IMAGE_LINE_MS = 15e3;   // giữ dòng ảnh vừa đọc bấy lâu (app hỏi liền các ảnh cùng dòng) rồi bỏ
+const newEpoch = () => crypto.randomBytes(4).toString('hex');
+const fileIdOf = (st) => `${st.ino}:${st.birthtimeMs}`;   // đổi khi file lịch sử bị thay bằng file khác
 
 class Session {
   constructor(id, { cwd, mode = 'default', model = '', known = false, hub, opts = {} }) {
@@ -624,7 +658,9 @@ class Session {
     this.hub = hub;
     this.events = [];
     this.seq = 0;
-    this.epoch = crypto.randomBytes(4).toString('hex');
+    this.epoch = newEpoch();       // của dãy sự kiện: đổi mỗi lần nạp lại lịch sử (app phát lại theo seq)
+    this.fileEpoch = newEpoch();   // của tên ảnh giữ chỗ: chỉ đổi khi file lịch sử bị cắt / thay
+    this.imageRefs = new Set();    // dòng có ảnh đã đặt tên trong fileEpoch hiện tại: `<off>-<len>`
     this.clients = new Set();
     this.pending = new Map();
     this.proc = null;
@@ -653,16 +689,36 @@ class Session {
   image(name) {
     const l = /^l-([0-9a-f]{8})-(\d{1,12})-(\d{1,9})-(\d{1,3})\.[a-z]+$/.exec(String(name || ''));
     if (!l) return readUpload(this.id, name);
-    if (l[1] !== this.epoch) throw noImage();   // tên của lần nạp lịch sử trước
-    // app thường hỏi liền các ảnh của cùng một dòng -> nhớ dòng vừa đọc
-    const key = `${this.epoch}:${l[2]}:${l[3]}`;
-    if (!this.imageLine || this.imageLine.key !== key) {
-      this.imageLine = { key, images: transcriptLineImages(this.transcriptFile(), +l[2], +l[3]) };
+    // chỉ đọc dòng chính phiên đã đặt tên (tên từ trước khi file bị thay / tên bịa -> không đụng tới file)
+    const ref = `${l[2]}-${l[3]}`;
+    if (l[1] !== this.fileEpoch || !this.imageRefs.has(ref)) throw noImage();
+    // app thường hỏi liền các ảnh của cùng một dòng -> nhớ dòng vừa đọc một lúc rồi bỏ (base64 có thể vài chục MB)
+    if (!this.imageLine || this.imageLine.ref !== ref) {
+      this.imageLine = { ref, images: transcriptLineImages(this.transcriptFile(), +l[2], +l[3]) };
     }
+    clearTimeout(this.imageLineTimer);
+    this.imageLineTimer = setTimeout(() => { this.imageLine = null; }, IMAGE_LINE_MS).unref();
     const x = this.imageLine.images[+l[4]];
     const t = x && sniffImage(x.data);
     if (!t) throw noImage();
     return { mime: t.mime, data: x.data };
+  }
+
+  // Vẫn là file lịch sử đang theo dõi và chỉ được ghi thêm -> các dòng đã đọc giữ nguyên vị trí.
+  appendedOnly(st) {
+    return this.fileOffset != null && st.size >= this.fileOffset && this.fileId === fileIdOf(st);
+  }
+
+  // File lịch sử mới (lần đầu, bị cắt / thay) -> tên ảnh giữ chỗ cũ hết hiệu lực.
+  resetFile(st, fileEpoch = newEpoch(), imageRefs = new Set()) {
+    Object.assign(this, { fileId: fileIdOf(st), fileEpoch, imageRefs, imageLine: null });
+  }
+
+  // Theo dõi file lịch sử từ dòng trọn vẹn cuối: bỏ qua phần đã có, không cắt ngang dòng đang ghi dở.
+  followEnd(f, st) {
+    if (!this.appendedOnly(st)) this.resetFile(st);
+    this.fileOffset = fileWholeEnd(f, st.size);
+    this.tailRest = Buffer.alloc(0);
   }
 
   // nạp lại lịch sử từ file khi phiên đang tắt (có thể vừa được dùng trong terminal)
@@ -674,7 +730,15 @@ class Session {
     try { st = fs.statSync(f); } catch { return; }
     const stamp = `${st.mtimeMs}:${st.size}`;
     if (stamp === this.fileStamp && !force) return;
+    // file chỉ được ghi thêm -> giữ tên ảnh cũ (app khỏi tải lại ảnh đang cache); bị cắt / thay -> đặt tên lại
+    const keep = this.appendedOnly(st);
+    const fileEpoch = keep ? this.fileEpoch : newEpoch();
+    const refs = keep ? this.imageRefs : new Set();
+    const r = readTranscript(f, { epoch: fileEpoch, refs });
+    if (!r) return;   // không đọc được (Windows đang khoá file…) -> giữ nguyên, lần sau thử lại
+    if (!keep) this.resetFile(st, fileEpoch, refs);
     this.fileStamp = stamp;
+    this.fileOffset = r.end;   // tail đọc tiếp từ dòng chưa trọn (nếu có), không bỏ sót / không lặp
     this.tailRest = Buffer.alloc(0);
     this.known = true;
     const meta = sessionMeta(f, st);
@@ -682,11 +746,8 @@ class Session {
     this.title = meta.title;
     this.events = [];
     this.seq = 0;
-    this.epoch = crypto.randomBytes(4).toString('hex');
-    this.imageLine = null;
-    const { events, end } = readTranscript(f, { epoch: this.epoch });
-    this.fileOffset = end;   // tail đọc tiếp từ dòng chưa trọn (nếu có), không bỏ sót / không lặp
-    for (const e of events) this.store(e, false);
+    this.epoch = newEpoch();
+    for (const e of r.events) this.store(e, false);
     const last = [...this.events].reverse().find((e) => e.kind === 'assistant');
     if (last) this.lastText = clip(plain(last.text), 160);
     this.updatedAt = Math.round(st.mtimeMs);
@@ -700,7 +761,7 @@ class Session {
     if (!f) return;
     let st;
     try { st = fs.statSync(f); } catch { return; }
-    if (this.fileOffset == null || st.size < this.fileOffset) return this.loadTranscript(true);
+    if (!this.appendedOnly(st)) return this.loadTranscript(true);
     if (st.size === this.fileOffset) return;
     let chunk;
     try {
@@ -727,7 +788,7 @@ class Session {
         this.bridge.busy = true;
         if (this.bridge.attached) this.attach(false, 'Bạn vừa gõ trên máy — duyệt quyền trả về máy tính');
       }
-      for (const e of lineEvents(m, base + at, len, this.epoch)) {
+      for (const e of lineEvents(m, base + at, len, this.fileEpoch, this.imageRefs)) {
         if (e.kind === 'user' && this.echo && this.echo.has(e.text)) { this.echo.delete(e.text); continue; }
         this.store({ ...e, t: Date.parse(m.timestamp) || Date.now() });
       }
@@ -831,7 +892,7 @@ class Session {
     try { if (!fs.statSync(this.cwd).isDirectory()) throw new Error(); } catch {
       throw new RemoteError('NO_CWD', `Thư mục không tồn tại: ${this.cwd}`);
     }
-    if (!this.known && sessionFile(this.id)) this.known = true;
+    if (!this.known && this.transcriptFile()) this.known = true;
     const args = [...bin.pre, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--permission-prompt-tool', 'stdio', '--permission-mode', this.mode,
       ...(this.model ? ['--model', this.model] : []),
@@ -879,10 +940,10 @@ class Session {
       this.store({ kind: 'error', text: `Claude dừng (mã ${code})${tail ? `: ${clip(tail, 600)}` : ''}` });
     } else if (wasBusy && !this.stopping) this.store({ kind: 'note', text: 'Tiến trình Claude đã dừng' });
     this.stopping = false;
-    const f = sessionFile(this.id);
-    if (f) {   // file vừa do chính tiến trình này ghi -> không cần nạp lại (giữ sự kiện duyệt quyền, kết quả...)
+    const f = this.transcriptFile();
+    if (f) {   // file vừa do chính tiến trình này ghi -> không nạp lại (giữ sự kiện duyệt quyền, kết quả...), tail không đọc lại
       this.known = true;
-      try { const st = fs.statSync(f); this.fileStamp = `${st.mtimeMs}:${st.size}`; } catch {}
+      try { const st = fs.statSync(f); this.fileStamp = `${st.mtimeMs}:${st.size}`; this.followEnd(f, st); } catch {}
     }
     this.setStatus('off');
     if (this.afterRestart) {
@@ -1054,8 +1115,8 @@ class Session {
     const imgs = checkImages(images);
     if (!text && !imgs.length) throw new RemoteError('EMPTY', 'Tin nhắn trống');
     if (text.length > MAX_TEXT) throw new RemoteError('TOO_LONG', 'Tin nhắn quá dài (tối đa 1 triệu ký tự)');
-    const saved = saveUploads(this.id, imgs);
-    const ev = { kind: 'user', text, ...(saved.length ? { images: saved.map((x) => ({ name: x.name, thumb: x.thumb })) } : {}) };
+    const saved = saveUploads(this.id, imgs, (err) => this.store({ kind: 'error', text: `Không lưu được ảnh trên máy: ${err.message}` }));
+    const ev = { kind: 'user', text, ...(saved.length ? { images: saved.map((x) => ({ name: x.name, ...(x.thumb ? { thumb: x.thumb } : {}) })) } : {}) };
     if (this.bridge && !this.proc) return this.sendExternal(text, saved, ev);
     this.start();
     this.store(ev);
@@ -1294,7 +1355,7 @@ function createHub(ctx = {}) {
         if (!s.events.length) s.loadTranscript(true);
         else {   // đã có sự kiện (vd. tin vừa gửi) -> không nạp lại để khỏi mất, chỉ theo dõi từ cuối file
           const f = s.transcriptFile();
-          try { if (f) { s.fileOffset = fs.statSync(f).size; s.tailRest = Buffer.alloc(0); } } catch {}
+          try { if (f) s.followEnd(f, fs.statSync(f)); } catch {}
         }
       }
       return s;
@@ -1410,8 +1471,8 @@ function createHub(ctx = {}) {
     get(id, { load = true } = {}) {
       let s = sessions.get(id);
       if (!s) {
-        if (!sessionFile(id)) return null;
         s = new Session(id, { known: true, hub });
+        if (!s.transcriptFile()) return null;
         sessions.set(id, s);
         load = true;
       }

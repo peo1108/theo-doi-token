@@ -10,12 +10,12 @@ const { execFileSync } = require('child_process');
 const os = require('os');
 const path = require('path');
 const { effectiveUsage, loginState } = require('./analytics.js');
+const { sleepSync, writeAtomicSync } = require('./fsutil.js');
 
 const BACKUP_KEEP = 5;            // số cặp sao lưu giữ lại
 const LOCK_TTL_MS = 30e3;         // khoá hết hạn sau 30 giây
 const WRITE_RETRIES = 5;          // số lần thử lại khi Windows khoá file
 const WRITE_RETRY_MS = 100;
-const RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
 class AccountError extends Error {
   // code: FORMAT | NOT_FOUND | AMBIGUOUS | LOCKED | NO_TOKEN | WRITE_FAILED | ACTIVE | NAME_TAKEN
@@ -51,10 +51,6 @@ function paths() {
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isStr = (v) => typeof v === 'string' && v !== '';
 
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
 // Đọc file JSON dạng object. Không có file -> {}; hỏng hoặc không phải object -> FORMAT.
 function readObject(file) {
   let text;
@@ -72,21 +68,11 @@ function readObject(file) {
   return obj;
 }
 
-// Ghi atomic: file tạm cùng thư mục rồi đổi tên. Windows có thể khoá file tạm thời
-// (EPERM/EBUSY/EACCES) nên thử lại vài lần trước khi bỏ cuộc.
+// Ghi atomic (fsutil.js: file tạm rồi đổi tên, Windows khoá file thì thử lại vài lần trước khi bỏ cuộc).
 function writeAtomic(file, text) {
-  const tmp = `${file}.${process.pid}.tmp`;
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(tmp, text, { mode: 0o600 });
-    for (let attempt = 0; ; attempt++) {
-      try { fs.renameSync(tmp, file); return; } catch (e) {
-        if (!RETRY_CODES.has(e.code) || attempt >= WRITE_RETRIES) throw e;
-        sleepSync(WRITE_RETRY_MS);
-      }
-    }
+    writeAtomicSync(file, text, { mode: 0o600, retries: WRITE_RETRIES, retryMs: WRITE_RETRY_MS });
   } catch (e) {
-    try { fs.unlinkSync(tmp); } catch {}
     throw new AccountError('WRITE_FAILED', `Không ghi được ${path.basename(file)}: ${e.message}`, { cause: e });
   }
 }

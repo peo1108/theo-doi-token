@@ -158,6 +158,21 @@ test('ngắt, đổi chế độ, đóng rồi gửi lại thì --resume và gi�
   assert.deepEqual(evs.filter((e) => e.kind === 'user').map((e) => e.text), ['SLOW', 'tiếp'], 'nạp lịch sử từ file');
 });
 
+test('mở lại phiên cũ, gửi tiếp rồi đóng: tail không đọc lại phần claude -p vừa ghi (không lặp sự kiện)', async () => {
+  const { body } = await api('POST', '/v1/sessions', { cwd: WORK, text: 'một' });
+  const s = hub.get(body.id, { load: false });
+  await watch(s.id, has('result'));
+  s.close();
+  await until(() => !s.proc);
+  s.loadTranscript(true);   // app mở phiên cũ
+  s.send('hai');
+  await until(() => { const i = s.events.findIndex((e) => e.text === 'hai'); return i >= 0 && s.events.slice(i).some((e) => e.kind === 'result'); });
+  s.close();
+  await until(() => !s.proc);
+  s.tail();
+  assert.deepEqual(s.events.filter((e) => e.kind === 'user' || e.kind === 'assistant').map((e) => e.text), ['một', 'echo: một', 'hai', 'echo: hai']);
+});
+
 test('hết hạn mức: báo limit kèm gợi ý; đổi tài khoản khởi động lại phiên rồi gửi tiếp', async () => {
   const { body } = await api('POST', '/v1/sessions', { cwd: WORK, text: 'LIMIT' });
   const id = body.id;
@@ -683,6 +698,10 @@ test('ảnh vào phiên claude -p thành khối image; xem lại ảnh đầy đ
   await R.call(hub, 'sessions.send', { id: s.id, text: '', images: [img()] });
   await until(() => inputLog().pop().content.length === 1);
   assert.equal(inputLog().pop().content[0].type, 'image');
+  // ảnh nhỏ thiếu / quá cỡ -> sự kiện không mang thumb (không cắt cụt thành ảnh hỏng), app tự tải ảnh thật
+  await R.call(hub, 'sessions.send', { id: s.id, text: 'không thumb', images: [{ ...img(), thumb: undefined }, { ...img(), thumb: 'A'.repeat(400001) }] });
+  const u2 = (await watch(s.id, has('user', (e) => e.text === 'không thumb'))).find((e) => e.text === 'không thumb');
+  assert.deepEqual(u2.images.map((x) => 'thumb' in x), [false, false]);
 });
 
 test('ảnh: sai chữ ký file -> BAD_IMAGE; quá 10 ảnh -> TOO_MANY_IMAGES; tin 900 000 ký tự qua được', async () => {
@@ -764,11 +783,15 @@ test('ảnh Claude xem trong lịch sử (Read, ảnh dán VS Code): chỉ giữ
   const r2 = s.events.find((e) => e.kind === 'tool_result' && e.id === 'r2');
   assert.deepEqual(await R.call(hub, 'sessions.image', { id, name: r2.images[0].name }), { mime: 'image/png', data: PNG });
 
-  // nạp lại lúc dòng ảnh đang ghi dở: dòng đó không mất, không lặp — tail đọc tiếp khi ghi xong; tên cũ hết hiệu lực
+  // nạp lại lúc dòng ảnh đang ghi dở: dòng đó không mất, không lặp — tail đọc tiếp khi ghi xong.
+  // File chỉ được ghi thêm -> tên ảnh cũ giữ nguyên (app khỏi tải lại ảnh đang cache)
   const half = lines([{ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'r3', content: [block(JPG, 'image/jpeg')] }] } }]);
   fs.appendFileSync(file, half.slice(0, 60));
+  const streamEpoch = s.epoch;
   s.loadTranscript(true);
-  await assert.rejects(R.call(hub, 'sessions.image', { id, name: r2.images[0].name }), (e) => e.code === 'NOT_FOUND');
+  assert.notEqual(s.epoch, streamEpoch, 'dãy sự kiện đánh số lại -> app nạp lại từ đầu');
+  assert.equal(s.events.find((e) => e.id === 'r2').images[0].name, r2.images[0].name);
+  assert.deepEqual(await R.call(hub, 'sessions.image', { id, name: r2.images[0].name }), { mime: 'image/png', data: PNG });
   assert.ok(!s.events.some((e) => e.id === 'r3'));
   fs.appendFileSync(file, half.slice(60));
   s.tail();
@@ -777,6 +800,40 @@ test('ảnh Claude xem trong lịch sử (Read, ảnh dán VS Code): chỉ giữ
   assert.deepEqual(await R.call(hub, 'sessions.image', { id, name: r3[0].images[0].name }), { mime: 'image/jpeg', data: JPG });
   s.tail();
   assert.equal(s.events.filter((e) => e.id === 'r3').length, 1);
+
+  // đọc file lỗi (Windows đang khoá) -> giữ nguyên lịch sử và vị trí, không đọc lại cả file thành sự kiện mới
+  const count = s.events.length, offset = s.fileOffset;
+  fs.appendFileSync(file, lines([{ type: 'assistant', message: { content: [{ type: 'text', text: 'sau khoá' }] } }]));
+  const realRead = fs.readFileSync;
+  fs.readFileSync = (p, ...a) => { if (p === file) throw Object.assign(new Error('busy'), { code: 'EBUSY' }); return realRead(p, ...a); };
+  try { s.loadTranscript(true); } finally { fs.readFileSync = realRead; }
+  assert.deepEqual([s.events.length, s.fileOffset], [count, offset]);
+  s.tail();
+  assert.equal(s.events.length, count + 1);
+  assert.equal(s.events.filter((e) => e.text === 'sau khoá').length, 1);
+
+  // file bị ghi lại ngắn hơn -> đặt tên lại, tên cũ hết hiệu lực
+  fs.writeFileSync(file, lines([{ type: 'user', cwd: WORK, message: { content: [block(PNG)] } }]));
+  s.tail();
+  await assert.rejects(R.call(hub, 'sessions.image', { id, name: r3[0].images[0].name }), (e) => e.code === 'NOT_FOUND');
+  const fresh = s.events.find((e) => e.kind === 'user').images[0].name;
+  assert.notEqual(/^l-([0-9a-f]{8})-/.exec(fresh)[1], ep);
+  assert.deepEqual(await R.call(hub, 'sessions.image', { id, name: fresh }), { mime: 'image/png', data: PNG });
+});
+
+test('bắt đầu theo dõi file lúc dòng cuối đang ghi dở (dài hơn một khúc đọc): không mất dòng đó', () => {
+  const id = 'abcdef00-9999-6666-7777-888888888888';
+  const dir = path.join(PROJECTS, 'follow');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${id}.jsonl`);
+  const line = (text) => JSON.stringify({ type: 'assistant', sessionId: id, timestamp: new Date().toISOString(), message: { content: [{ type: 'text', text }] } }) + '\n';
+  const big = line('x'.repeat(200e3));
+  fs.writeFileSync(file, line('cũ') + big.slice(0, 150e3));
+  const s = new R.Session(id, { hub, known: true });
+  s.followEnd(file, fs.statSync(file));
+  fs.appendFileSync(file, big.slice(150e3));
+  s.tail();
+  assert.deepEqual(s.events.map((e) => e.text.length), [200e3]);
 });
 
 test('ảnh Claude xem trong phiên claude -p: một file theo nội dung, không để file tạm; dọn ảnh chừa phiên còn trong bộ nhớ', async () => {
@@ -803,22 +860,28 @@ test('ảnh Claude xem trong phiên claude -p: một file theo nội dung, khôn
   assert.ok(fs.existsSync(up), 'phiên còn trong bộ nhớ -> không dọn');
 });
 
-test('ghi ảnh: Windows báo EPERM khi đổi tên -> thử lại; vẫn lỗi thì ghi thẳng, không để file tạm', async () => {
+test('ghi ảnh: Windows báo EPERM khi đổi tên -> thử lại ở nền; vẫn lỗi thì báo lỗi, không ghi thẳng, không để file tạm', async () => {
   const s = await R.call(hub, 'sessions.create', { cwd: WORK, text: 'mở' });
   await watch(s.id, has('result'));
+  const up = path.join(env.dataDir, 'uploads', s.id);
+  const files = () => (fs.existsSync(up) ? fs.readdirSync(up) : []);
   const real = fs.renameSync;
   let fails = 2;
   fs.renameSync = (a, b) => { if (fails-- > 0) throw Object.assign(new Error('busy'), { code: 'EPERM' }); return real(a, b); };
   try {
     await R.call(hub, 'sessions.send', { id: s.id, text: 'a', images: [img()] });
+    // không chờ đồng bộ: send đã trả về khi chưa đổi tên được, trong lúc đó app vẫn xem được ảnh
+    assert.ok(!files().some((f) => f.endsWith('.png')));
+    const name = hub.get(s.id, { load: false }).events.filter((e) => e.kind === 'user').pop().images[0].name;
+    assert.deepEqual(await R.call(hub, 'sessions.image', { id: s.id, name }), { mime: 'image/png', data: PNG });
+    await until(() => files().includes(name));
+    assert.deepEqual(fs.readFileSync(path.join(up, name)), Buffer.from(PNG, 'base64'));
+
     fails = 99;
     await R.call(hub, 'sessions.send', { id: s.id, text: 'b', images: [img(JPG, 'image/jpeg', 'b.jpg')] });
+    await watch(s.id, has('error', (e) => e.text.startsWith('Không lưu được ảnh trên máy')));
   } finally { fs.renameSync = real; }
-  const up = path.join(env.dataDir, 'uploads', s.id);
-  const byExt = Object.fromEntries(fs.readdirSync(up).map((f) => [path.extname(f), f]));
-  assert.deepEqual(Object.keys(byExt).sort(), ['.jpg', '.png']);
-  assert.deepEqual(fs.readFileSync(path.join(up, byExt['.jpg'])), Buffer.from(JPG, 'base64'));
-  assert.deepEqual(fs.readFileSync(path.join(up, byExt['.png'])), Buffer.from(PNG, 'base64'));
+  assert.deepEqual(files().map((f) => path.extname(f)), ['.png'], 'không có ảnh ghi dở mang tên thật, không còn file tạm');
 });
 
 test('dọn ảnh cũ hơn 7 ngày trong data/uploads', () => {
@@ -829,9 +892,16 @@ test('dọn ảnh cũ hơn 7 ngày trong data/uploads', () => {
   fs.writeFileSync(path.join(old, 'a.png'), 'x');
   const t = (Date.now() - 8 * 24 * 3600e3) / 1000;
   fs.utimesSync(old, t, t);
+  // file tạm sót lại (xoá cũng bị khoá) cũ hơn 1 giờ thì dọn, file tạm đang ghi thì không
+  const stale = path.join(fresh, '1-1.png.9.1.tmp'), writingNow = path.join(fresh, '1-2.png.9.2.tmp');
+  fs.writeFileSync(stale, 'x');
+  fs.writeFileSync(writingNow, 'x');
+  const h = (Date.now() - 2 * 3600e3) / 1000;
+  fs.utimesSync(stale, h, h);
   R.sweepUploads(Date.now());
   assert.ok(!fs.existsSync(old));
   assert.ok(fs.existsSync(fresh));
+  assert.deepEqual([fs.existsSync(stale), fs.existsSync(writingNow)], [false, true]);
 });
 
 test('server trên máy chỉ còn cho hook: không còn API điện thoại kiểu cũ (Tailscale, mã ghép)', async () => {

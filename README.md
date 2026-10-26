@@ -45,6 +45,7 @@ Nháy đúp để mở dashboard.
 | `dashboard.html` | giao diện |
 | `models.json` | bảng giá & màu từng model — sửa ở đây khi giá đổi hoặc có model mới |
 | `accounts.js` | hồ sơ tài khoản, đổi đăng nhập, dòng thời gian đổi (lõi của `cc-switch` và API `/api/accounts`) |
+| `fsutil.js` | ghi file atomic dùng chung (file tạm rồi đổi tên, Windows khoá file thì thử lại) |
 | `remote.js` | điều khiển từ điện thoại: phiên Claude, hook VS Code (xem [Điện thoại](#điện-thoại-cc-remote)) |
 | `hub-link.js` | PC kết nối ra hub trên VPS |
 | `hub/` | hub trên VPS: tài khoản, trang web quản trị, trung chuyển app ⇄ PC (xem [hub/README.md](hub/README.md)) |

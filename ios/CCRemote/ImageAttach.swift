@@ -117,6 +117,8 @@ enum RemoteImages {
         return c
     }()
     private static var inflight: [String: Task<Data?, Never>] = [:]
+    /// ảnh nhỏ kèm sự kiện không giải mã được -> nhớ để không giải mã lại mỗi lần vẽ
+    private static var badThumbs: Set<String> = []
 
     private static func data(_ api: APIClient, _ sessionId: String, _ name: String) async -> Data? {
         let key = "\(sessionId)/\(name)"
@@ -147,10 +149,15 @@ enum RemoteImages {
     }
 
     /// Ảnh nhỏ có sẵn trong sự kiện (điện thoại gửi): giải mã một lần rồi nhớ, không giải mã lại mỗi lần vẽ.
+    /// Rỗng / hỏng -> nil (nhớ luôn lần hỏng), ô ảnh chuyển sang tải ảnh thật từ máy.
     static func inlineThumb(_ sessionId: String, _ name: String, base64: String) -> UIImage? {
         let key = thumbKey(sessionId, name, 0)
         if let img = thumbs.object(forKey: key) { return img }
-        guard let img = ImagePrep.image(base64: base64) else { return nil }
+        if base64.isEmpty || badThumbs.contains(key as String) { return nil }
+        guard let img = ImagePrep.image(base64: base64) else {
+            badThumbs.insert(key as String)
+            return nil
+        }
         thumbs.setObject(img, forKey: key, cost: cost(img))
         return img
     }
@@ -166,7 +173,8 @@ enum RemoteImages {
 
     static func full(_ api: APIClient, _ sessionId: String, _ name: String) async -> UIImage? {
         guard let d = await data(api, sessionId, name) else { return nil }
-        return await Task.detached(priority: .userInitiated) { UIImage(data: d)?.preparingForDisplay() }.value
+        // preparingForDisplay trả nil với vài định dạng điểm ảnh (PNG 16-bit, xám…) -> dùng ảnh chưa chuẩn bị
+        return await Task.detached(priority: .userInitiated) { UIImage(data: d).map { $0.preparingForDisplay() ?? $0 } }.value
     }
 
     nonisolated private static func downsample(_ data: Data, maxPixel: CGFloat) -> UIImage? {
@@ -225,8 +233,8 @@ struct EventImages: View {
                     Button {
                         Task { await open(im) }
                     } label: {
-                        if let t = im.thumb {
-                            ImageTile(image: RemoteImages.inlineThumb(sessionId, im.name, base64: t), width: 72, height: 72)
+                        if let t = im.thumb, let thumb = RemoteImages.inlineThumb(sessionId, im.name, base64: t) {
+                            ImageTile(image: thumb, width: 72, height: 72)
                         } else {
                             // hàng có thể được dùng lại cho sự kiện khác (nạp lại lịch sử) -> đổi tên là ô mới, không giữ ảnh cũ
                             RemoteImageTile(name: im.name, sessionId: sessionId, large: large).id(im.name)
