@@ -128,6 +128,22 @@ test('quản trị: khoá cắt kết nối ngay, mở khoá đăng nhập lại
   } finally { await T.stop(); }
 });
 
+test('của tôi: đổi tên / ngắt máy trên trang web -> app đang mở thấy ngay (không đợi nối lại)', async () => {
+  const { T, admin } = await setup();
+  try {
+    const pair = (await T.post('/v1/machines/pair', { username: 'cam', password: 'mat-khau-cam', machineName: 'pc' })).body;
+    const phone = (await T.post('/v1/auth/login', { username: 'cam', password: 'mat-khau-cam', deviceName: 'iPhone' })).body;
+    const app = await T.ws({ type: 'hello', proto: 1, role: 'app', token: phone.token });
+    await app.next((m) => m.type === 'welcome');
+    await admin.req('POST', '/v1/web/machines/rename', { id: pair.machineId, name: 'PC nhà' });
+    assert.equal((await app.next((m) => m.type === 'machine')).name, 'PC nhà');
+    await admin.req('POST', '/v1/web/machines/revoke', { id: pair.machineId });
+    const gone = await app.next((m) => m.type === 'machine');
+    assert.equal(gone.id, pair.machineId);
+    assert.equal(gone.removed, true);
+  } finally { await T.stop(); }
+});
+
 test('của tôi: đổi mật khẩu, đổi tên / ngắt máy, thu hồi thiết bị, đăng xuất, đăng xuất mọi nơi', async () => {
   const { T, admin } = await setup();
   try {

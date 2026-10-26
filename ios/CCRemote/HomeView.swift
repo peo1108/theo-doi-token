@@ -205,7 +205,7 @@ struct LiveRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(session.title ?? "Phiên mới").font(.body.weight(.medium)).lineLimit(1)
+                Text(session.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Phiên mới").font(.body.weight(.medium)).lineLimit(1)
                 Spacer()
                 StatusBadge(status: session.status)
             }

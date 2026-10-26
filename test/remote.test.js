@@ -278,10 +278,11 @@ test('capabilities khi chưa có phiên nào: mở claude chỉ để hỏi init
 
 const { spawn: spawnProc } = require('child_process');
 // Chạy hook.js như Claude Code: JSON qua stdin, trả về mã thoát, stdout, stderr.
-function runHook(event, input) {
-  return new Promise((resolve) => {
-    const p = spawnProc(process.execPath, [path.join(__dirname, '..', 'hook.js'), event], {
-      env: { ...process.env, REMOTE_PORT: String(server.address().port), CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', CC_REMOTE_CHILD: '' },
+function runHook(event, input, port = server.address().port) {
+  let p;
+  const done = new Promise((resolve) => {
+    p = spawnProc(process.execPath, [path.join(__dirname, '..', 'hook.js'), event], {
+      env: { ...process.env, REMOTE_PORT: String(port), CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', CC_REMOTE_CHILD: '' },
     });
     let out = '', err = '';
     p.stdout.on('data', (d) => { out += d; });
@@ -289,6 +290,7 @@ function runHook(event, input) {
     p.on('close', (code) => resolve({ code, out, err }));
     p.stdin.end(JSON.stringify(input));
   });
+  return Object.assign(done, { kill: () => p.kill() });
 }
 
 test('điều khiển phiên VS Code: /phone, chờ lệnh, gửi tin, xin quyền, gõ ở máy thì thả', async () => {
@@ -409,6 +411,53 @@ test('cài / gỡ hook: giữ hook khác của người dùng, có lệnh /phone
   assert.ok(!fs.existsSync(path.join(env.dir, 'commands', 'phone.md')));
 });
 
+test('cài hook: dọn hook hỏng khi đã chuyển thư mục tool, giữ hook.js của người khác; settings.json có BOM vẫn đọc được', () => {
+  const settings = path.join(env.dir, 'settings.json');
+  const ours = (s) => Object.values(s.hooks).flat().flatMap((g) => g.hooks).map((h) => h.command);
+  // thư mục tool cũ đã bị chuyển đi (hook.js không còn) + một hook.js khác của người dùng
+  const gone = path.join(env.dir, 'thu-muc-cu').replace(/\\/g, '/');
+  const other = path.join(env.dir, 'khac');
+  fs.mkdirSync(other, { recursive: true });
+  fs.writeFileSync(path.join(other, 'hook.js'), '// hook riêng của người dùng\n');
+  const otherCmd = `node "${other.replace(/\\/g, '/')}/hook.js" stop`;
+  fs.writeFileSync(settings, '\uFEFF' + JSON.stringify({ hooks: {
+    Stop: [{ hooks: [{ type: 'command', command: `node "${gone}/hook.js" stop`, timeout: 86400, asyncRewake: true }] },
+      { hooks: [{ type: 'command', command: otherCmd }] }],
+    PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: `node "${gone}/hook.js" pretool`, timeout: 10 }] }],
+  } }));
+  const before = R.hooksStatus();
+  assert.equal(before.outdated, true, 'hook trỏ tới thư mục cũ -> cần cài lại (tracker tự cài lúc khởi động)');
+  R.installHooks();
+  const s = JSON.parse(fs.readFileSync(settings, 'utf8'));
+  assert.ok(!ours(s).some((c) => c.includes(gone)), 'hook hỏng đã được dọn');
+  assert.ok(ours(s).includes(otherCmd), 'giữ hook.js của người khác');
+  assert.equal(ours(s).filter((c) => / stop$/.test(c)).length, 2);
+  assert.equal(R.hooksStatus().outdated, false);
+  assert.equal(R.uninstallHooks().installed, false);
+  assert.deepEqual(ours(JSON.parse(fs.readFileSync(settings, 'utf8'))), [otherCmd]);
+});
+
+test('tiêu đề phiên: tên đặt bằng /rename thắng ai-title ghi sau nó (cả lúc nạp lẫn lúc đang theo dõi)', async () => {
+  const id = 'abababab-1111-2222-3333-444444444444';
+  const dir = path.join(PROJECTS, 'title');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${id}.jsonl`);
+  const line = (o) => fs.appendFileSync(file, JSON.stringify({ sessionId: id, timestamp: new Date().toISOString(), ...o }) + '\n');
+  line({ type: 'user', cwd: WORK, message: { role: 'user', content: 'lời nhắn đầu' } });
+  line({ type: 'custom-title', customTitle: 'Tên tôi đặt' });
+  line({ type: 'ai-title', aiTitle: 'Tên AI đặt' });
+  assert.equal(R.recentSessions(400).find((s) => s.id === id).title, 'Tên tôi đặt');
+  const s = hub.get(id);
+  assert.equal(s.title, 'Tên tôi đặt');
+  s.followEnd(file, fs.statSync(file));
+  line({ type: 'ai-title', aiTitle: 'Tên AI mới' });
+  s.tail();
+  assert.equal(s.title, 'Tên tôi đặt', 'ai-title mới không đè tên người dùng đặt');
+  line({ type: 'custom-title', customTitle: 'Đổi tên lần hai' });
+  s.tail();
+  assert.equal(s.title, 'Đổi tên lần hai');
+});
+
 test('luôn sẵn sàng: không cần /phone, gõ ở máy thì nhả hook, rời máy thì hỏi quyền trên điện thoại', async () => {
   R.setAlwaysOn(true);
   hub.setIdle(500);   // đang ngồi ở máy
@@ -522,6 +571,60 @@ test('hook Stop chạy nền: gõ ở máy (UserPromptSubmit) thì nhả hook đ
   assert.equal(r.code, 0);
   assert.equal(r.err, '');
   assert.equal(hub.get(id, { load: false }).bridge.parked, null);
+});
+
+test('hook Stop: tracker khởi động lại khi hook đang chờ -> chờ tracker lên lại rồi đứng chờ tiếp; đã gõ lượt mới trên máy thì thôi', async () => {
+  R.setAlwaysOn(true);
+  const id = 'cdcdcdcd-1111-2222-3333-444444444444';
+  const dir = path.join(PROJECTS, 'restart');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${id}.jsonl`);
+  const line = (o) => fs.appendFileSync(file, JSON.stringify({ cwd: WORK, sessionId: id, timestamp: new Date().toISOString(), ...o }) + '\n');
+  line({ type: 'user', message: { role: 'user', content: 'việc trên máy' } });
+  const base = { session_id: id, transcript_path: file, cwd: WORK };
+  // tracker riêng (cùng cổng mỗi lần mở lại); "tắt" = cắt mọi kết nối như tiến trình bị kill, không trả lời hook
+  let port = 0;
+  const downs = [];
+  const notes = [];
+  const up = async () => {
+    const h = R.createHub({ notify: async (title) => { notes.push(title); return true; } });
+    h.setIdle(60e3);   // máy để yên: xong lượt thì báo điện thoại
+    const srv = R.createRemoteServer(h);
+    await new Promise((r) => srv.listen(port, '127.0.0.1', r));
+    port = srv.address().port;
+    const down = () => { srv.closeAllConnections(); srv.close(); h.shutdown(); };
+    downs.push(down);
+    return { h, down };
+  };
+  const parkedOn = (h) => h.get(id, { load: false })?.bridge?.parked;
+  const hooks = [];
+  try {
+    let t = await up();
+    hooks.push(runHook('stop', base, port));
+    await until(() => parkedOn(t.h));
+    t.down();
+    await new Promise((r) => setTimeout(r, 2500));   // tracker tắt một lúc (hook thử lại mà chưa nối được)
+    t = await up();
+    await until(() => parkedOn(t.h), 10000);
+    assert.equal(notes.length, 1, 'đứng chờ lại không báo "Xong" lần nữa');
+    t.h.get(id, { load: false }).send('nhắn sau khi tracker khởi động lại');
+    const r1 = await hooks[0];
+    assert.equal(r1.code, 2, 'hook đứng chờ lại trên tracker mới và nhận tin');
+    assert.match(r1.err, /nhắn sau khi tracker khởi động lại/);
+
+    hooks.push(runHook('stop', base, port));
+    await until(() => parkedOn(t.h));
+    t.down();
+    line({ type: 'user', message: { role: 'user', content: 'gõ trên máy lúc tracker tắt' } });
+    t = await up();
+    const r2 = await hooks[1];
+    assert.equal(r2.code, 0);
+    assert.equal(r2.err, '');
+    assert.ok(!parkedOn(t.h), 'đã có lượt mới -> không đứng chờ lại');
+  } finally {
+    for (const d of downs) try { d(); } catch {}
+    for (const h of hooks) h.kill();   // test lỗi giữa chừng: hook còn đang chờ tracker lên lại
+  }
 });
 
 test('đầu phiên: báo cho Claude mã riêng của máy, cùng mã với tin điện thoại', async () => {

@@ -4,6 +4,21 @@
 
 - App: **xem được ảnh Claude xem trên máy** — ảnh Claude mở bằng Read, ảnh chụp màn hình của tool, ảnh dán vào khung
   chat VS Code. Ảnh hiện ngay dưới dòng tool / lời nhắn, bấm để xem cỡ đầy đủ (trước đây chỉ thấy chữ `[ảnh]`).
+- Khởi động lại khay / cập nhật tracker không còn làm phiên VS Code mất trạng thái "sẵn sàng": hook tự nối lại với tracker
+  mới (trước đây phải gõ một tin trong VS Code).
+- Chuyển thư mục tool sang chỗ khác: hook trỏ tới thư mục cũ được tự dọn và cài lại lúc khởi động (trước đây Claude Code
+  báo lỗi hook ở mọi lượt). Ghi `settings.json` an toàn (atomic, giữ symlink, chịu được BOM).
+- App: màn phiên không còn có lúc đứng im (không nhận tin mới) khi mở lại đúng phiên đang xem hoặc bấm thông báo của nó.
+- App: phiên VS Code không rung điện thoại khi m đang ngồi máy (chỉ báo khi điều khiển từ điện thoại hoặc máy để yên quá
+  45 giây); app chạy nền tự báo thì hub không đẩy ntfy trùng; không còn báo "Xong việc" hai lần.
+- Tên phiên đặt bằng `/rename` luôn được giữ (trước đây bị tiêu đề AI tự đặt ghi đè trên app).
+- Icon khay đổi màu theo % hạn mức 5h / tuần thật (trước đây có thể đỏ khi mới dùng 28% vì so với chi phí trung bình).
+- Dashboard: "Cài đặt" trên khay mở thẳng mục cài đặt; lưu cài đặt mà không ghi được file thì báo lỗi (trước đây báo đã
+  lưu rồi mất); vừa ghép hub thì trạng thái nối cập nhật sau vài giây thay vì 30 giây.
+- Ghép hub mà không ghi được `data/hub.json` thì thu hồi khoá máy trên hub và báo lỗi (trước đây để lại máy "ma").
+- Hạn mức từ Anthropic: lỗi 429 / 401 thì chờ hết chu kỳ (hoặc `Retry-After`) mới hỏi lại token đó, thay vì 20 giây
+  một lần.
+- Hub: đổi tên / ngắt máy trên trang web thì app đang mở thấy ngay.
 
 ## v1.2.0 — 2026-10-06
 

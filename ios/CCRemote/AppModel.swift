@@ -19,6 +19,9 @@ final class AppModel {
     var hubToken: String? = SecureStore.get("hubToken")
     var machineId: String = UserDefaults.standard.string(forKey: "machineId") ?? ""
     var hub: HubClient?
+    /// thứ tự các lần gọi /v1/state: chỉ nhận kết quả mới hơn lần đã hiện
+    @ObservationIgnored private var refreshSeq = 0
+    @ObservationIgnored private var appliedSeq = 0
 
     var isPaired: Bool { hubToken != nil }
     var machines: [HubMachine] { hub?.machines ?? [] }
@@ -111,16 +114,22 @@ final class AppModel {
         pickMachine()
         guard let api else { state = nil; lastError = hub?.lastError; return }
         if currentMachine?.online == false { lastError = "Máy \(currentMachine?.name ?? "") đang tắt hoặc chưa chạy tracker"; return }
+        let machine = machineId
+        refreshSeq += 1
+        let seq = refreshSeq
         do {
             let st: RemoteState = try await api.call("GET", "/v1/state")
+            // các lần làm mới chạy chồng nhau (poll, sự kiện "sessions", thao tác): kết quả về muộn của máy vừa bỏ chọn,
+            // hoặc cũ hơn cái đã hiện, thì bỏ — không lùi trạng thái (Notifier sẽ báo lặp "Xong việc")
+            guard machine == machineId, seq > appliedSeq else { return }
+            appliedSeq = seq
             state = st
             Notifier.shared.process(st)
             lastError = nil
             lastOK = Date()
-        } catch let e as APIError {
-            lastError = e.message
         } catch {
-            lastError = error.localizedDescription
+            guard machine == machineId else { return }
+            lastError = (error as? APIError)?.message ?? error.localizedDescription
         }
     }
 

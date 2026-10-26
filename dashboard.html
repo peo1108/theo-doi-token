@@ -699,7 +699,7 @@
     <p class="fine" id="fine"></p>
   </section>
 
-  <p class="disclaimer">Dữ liệu thật từ <b>~/.claude/projects</b> · chi tiết 7 ngày, tổng hợp 90 ngày trong <b>data/usage.json</b> · tự làm mới mỗi 30 giây · Prometheus: <b>/metrics</b><br>
+  <p class="disclaimer">Dữ liệu thật từ <b>~/.claude/projects</b> · chi tiết 7 ngày, tổng hợp 90 ngày trong <b>data/usage.json</b> · tự làm mới mỗi 10 giây · Prometheus: <b>/metrics</b><br>
     Chi phí là quy đổi theo giá API niêm yết; nếu dùng gói Pro/Max thì bạn không bị tính tiền theo số này.</p>
 </div>
 
@@ -1141,9 +1141,7 @@ els('cfgForm').addEventListener('submit', async e => {
   body.alertLimitPct = Math.min(100, body.alertLimitPct);
   body.notify = f.elements.notify.checked;
   try {
-    const res = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token-Tracker': '1' }, body: JSON.stringify(body) });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    CFG = await res.json();
+    CFG = await acctPost('/api/config', body);   // lỗi -> ném kèm thông báo của server (vd. không ghi được file)
     els('cfgMsg').textContent = 'Đã lưu ' + hhmm(Date.now());
     document.activeElement.blur();
     load();
@@ -1903,7 +1901,7 @@ function acctRow(a, info) {
   </div>`;
 }
 
-// force: vẽ lại cả khi đang gõ tên (lần làm mới nền 30 giây bỏ qua để không mất chữ đang gõ)
+// force: vẽ lại cả khi đang gõ tên (lần làm mới nền bỏ qua để không mất chữ đang gõ)
 function renderAccounts(force) {
   if (!R || (RENAMING && !force)) return;
   const info = acctInfo();
@@ -2068,7 +2066,7 @@ function renderAll() {
   animate = false;
 }
 
-let loading = false, loadAgain = false;
+let loading = false, loadAgain = false, firstRender = true;
 /* ---------------- điện thoại (CC Remote) ---------------- */
 let RM = null, RM_BUSY = false, rmMsgTimer = 0, rmLoadedAt = 0;
 function setRmMsg(kind, text) {
@@ -2151,6 +2149,7 @@ async function load() {
     els('live').classList.remove('is-error');
     els('updated').textContent = 'Cập nhật · ' + new Date(R.now).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     renderAll();
+    if (firstRender) { firstRender = false; openSettingsFromHash(); }
   } catch (err) {
     console.error(err);
     els('live').classList.add('is-error');
@@ -2225,12 +2224,21 @@ if (qs.get('theme')) applyTheme(qs.get('theme'));
 load();
 loadRemote();
 setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
-// thẻ điện thoại: 30 giây/lần; đang hiện mã ghép thì 3 giây/lần để thấy ngay khi ghép xong
+// thẻ điện thoại: 30 giây/lần; đang nối hub (vừa ghép, mất mạng) thì 3 giây/lần để thấy ngay khi nối xong
 setInterval(() => {
   if (document.hidden || RM_BUSY) return;
-  if ((RM && RM.pair) || Date.now() - rmLoadedAt > 30e3) loadRemote();
+  if ((RM && RM.hub && RM.hub.state === 'connecting') || Date.now() - rmLoadedAt > 30e3) loadRemote();
 }, 3e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+// khay → "Cài đặt" mở /#settings: mở sẵn mục cài đặt ngân sách & cảnh báo (lần đầu thì đợi vẽ xong mới cuộn tới,
+// không thì các thẻ phía trên nở ra đẩy nó khuất)
+function openSettingsFromHash() {
+  if (location.hash !== '#settings') return;
+  const s = els('settings');
+  s.open = true;
+  s.scrollIntoView({ block: 'center' });
+}
+addEventListener('hashchange', openSettingsFromHash);
 </script>
 </body>
 </html>

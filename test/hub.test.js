@@ -310,6 +310,20 @@ test('notify: app đang mở thì không đẩy; trùng key trong 24 giờ chỉ
   db.close();
 });
 
+test('notify: app chạy nền tự báo (notifies) -> hub bỏ sự kiện của phiên để không báo trùng, cảnh báo của PC vẫn đẩy', async () => {
+  const db = openDb(path.join(tmp(), 'hub.db'));
+  const a = db.createUser({ username: 'cam', passHash: 'x' });
+  const f = fakeFetch();
+  const N = createNotifier({ db, fetch: f });
+  const bg = [{ foreground: false, notifies: true }];
+  assert.equal(await N.send(a.id, { key: 's:1', title: 'Cần duyệt Bash', body: 'ls', machine: 'm1', session: 's1' }, bg), false);
+  assert.equal(await N.send(a.id, { key: 'day:80', level: 'warning', title: 'Sắp chạm ngân sách ngày', body: '$8 / $10', machine: 'm1', session: '' }, bg), true);
+  assert.equal(await N.send(a.id, { key: 's:2', title: 'Xong · demo', body: 'x', machine: 'm1', session: 's1' }, [{ foreground: false, notifies: false }]), true,
+    'app không tự báo được (tắt thông báo / không giữ chạy nền) -> vẫn đẩy');
+  assert.equal(f.calls.length, 2);
+  db.close();
+});
+
 test('notify qua hub: agent gửi notify -> hub đẩy ntfy kèm đúng máy', async () => {
   const f = fakeFetch();
   const T = await startHub({ notifier: (db) => createNotifier({ db, fetch: f }) });
@@ -320,6 +334,12 @@ test('notify qua hub: agent gửi notify -> hub đẩy ntfy kèm đúng máy', a
     while (!f.calls.length && Date.now() - t0 < 2000) await new Promise((r) => setTimeout(r, 20));
     assert.equal(f.calls.length, 1);
     assert.equal(f.calls[0].headers.Click, `ccremote://session/${U.mA}/s9`);
+    // app chạy nền nhưng tự báo -> sự kiện phiên không đẩy nữa
+    U.appA.send({ type: 'presence', foreground: false, notifies: true });
+    await new Promise((r) => setTimeout(r, 50));
+    U.agentA.send({ type: 'notify', key: 'xong-3', title: 'Xong', body: 'x', session: 's9' });
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(f.calls.length, 1);
     // app báo đang mở -> không đẩy
     U.appA.send({ type: 'presence', foreground: true });
     await new Promise((r) => setTimeout(r, 50));

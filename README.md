@@ -32,7 +32,9 @@ hạn mức 5h/tuần ở `api.anthropic.com` bằng chính token Claude Code c�
 | Kết nối điện thoại (hub) | dashboard → thẻ Điện thoại → **Kết nối hub** |
 | Đổi tài khoản Claude Code | `cc-switch` (thêm thư mục dự án vào PATH) — xem [Nhiều tài khoản](#nhiều-tài-khoản) |
 
-Icon khay: xám = chưa mở cửa sổ 5 giờ · xanh = bình thường · vàng = cao hơn trung bình · đỏ = vượt ngưỡng/ngân sách.
+Icon khay: xám = chưa mở cửa sổ 5 giờ · xanh = bình thường · vàng = hạn mức 5h từ 70% · đỏ = hạn mức 5h hoặc tuần chạm
+ngưỡng cảnh báo (`alertLimitPct`) hoặc vượt ngân sách. Chưa có % hạn mức thật thì so với các cửa sổ trước: vàng = cao hơn
+trung bình, đỏ = vượt `alertWindowRatio` lần trung bình.
 Bấm trái hoặc phải vào icon để mở menu: các dòng Tài khoản (bấm để đổi), Thêm tài khoản, Mở dashboard, Thoát (tắt cả server).
 Nháy đúp để mở dashboard.
 
@@ -149,7 +151,9 @@ bản giả làm tin điện thoại trong trang web / file không lừa đượ
 
 Hook chỉ áp cho phiên VS Code / terminal; `claude -p` và SDK chạy nền không bị ảnh hưởng. Tracker không chạy hoặc trả
 lỗi thì hook cho qua ngay (~80 ms), không bao giờ chặn. Sau khi cập nhật code tracker, nhớ khởi động lại khay (Thoát →
-`start.bat`); hook cài từ bản cũ được tự cập nhật lúc khởi động, mở lại phiên Claude Code để có hiệu lực. Gỡ: `node remote.js hooks uninstall` (`settings.json` được sao lưu thành `settings.json.cc-remote-backup`).
+`start.bat`): phiên VS Code đang chờ tự nối lại với tracker mới trong vài giây (tối đa 3 phút chờ tracker lên lại), không
+cần gõ gì. Hook cài từ bản cũ — hoặc trỏ tới thư mục cũ khi đã chuyển thư mục tool — được tự cài lại lúc khởi động, mở lại
+phiên Claude Code để có hiệu lực. Gỡ: `node remote.js hooks uninstall` (`settings.json` được sao lưu thành `settings.json.cc-remote-backup`).
 
 ### Cài đặt (một lần)
 
@@ -160,7 +164,9 @@ lỗi thì hook cho qua ngay (~80 ms), không bao giờ chặn. Sau khi cập nh
    [`ios-latest`](https://github.com/peo1108/theo-doi-token/releases/tag/ios-latest), ký và cài bằng ESign, đăng nhập
    cùng tài khoản. Cùng tài khoản thì điện thoại thấy máy tính.
 4. Tuỳ chọn, **thông báo khi app đóng**: cài app **ntfy**, trên trang web của hub (hoặc Cài đặt trong app) bấm đăng ký
-   thông báo — hub tự cấp topic riêng cho tài khoản. Chỉ gửi tiêu đề ngắn qua ntfy.sh, không gửi code.
+   thông báo — hub tự cấp topic riêng cho tài khoản. Chỉ gửi tiêu đề ngắn qua ntfy.sh, không gửi code. App còn chạy nền
+   (Giữ kết nối khi ẩn app) thì app tự báo việc của phiên và hub không đẩy ntfy trùng; cảnh báo của PC (hạn mức, ngân
+   sách, đăng nhập) vẫn qua ntfy. Phiên VS Code chỉ rung điện thoại khi đang điều khiển từ điện thoại hoặc máy để yên.
 
 ### Cách hoạt động
 

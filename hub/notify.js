@@ -1,5 +1,6 @@
 // Thông báo của hub qua ntfy.sh: mỗi người dùng một topic ngẫu nhiên (128 bit, hub tự tạo).
-// Chỉ đẩy khi người đó không có app nào đang mở; bỏ trùng theo key trong 24 giờ; tối đa 30 / giờ / người.
+// Chỉ đẩy khi người đó không có app nào đang mở; sự kiện của phiên (xin quyền, xong việc…) cũng bỏ khi app đang chạy
+// nền và tự báo (không thì một việc báo hai lần); cảnh báo của PC vẫn đẩy. Bỏ trùng theo key trong 24 giờ; tối đa 30 / giờ / người.
 const DEDUPE_MS = 24 * 3600e3;
 const RATE_MS = 3600e3, RATE_MAX = 30;
 
@@ -14,6 +15,7 @@ function createNotifier({ db, fetch = globalThis.fetch, now = Date.now, server =
   async function send(userId, n, apps = []) {
     const t = now();
     if (apps.some((a) => a.foreground)) return false;
+    if (n.session && apps.some((a) => a.notifies)) return false;
     const k = `${userId}|${n.key || ''}`;
     if (n.key && seen.has(k) && t - seen.get(k) < DEDUPE_MS) return false;
     const recent = (sent.get(userId) || []).filter((x) => t - x < RATE_MS);

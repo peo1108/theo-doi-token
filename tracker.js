@@ -14,6 +14,7 @@ const { spawn } = require('child_process');
 const A = require('./analytics.js');
 const accounts = require('./accounts.js');
 const remote = require('./remote.js');
+const { writeAtomicSync } = require('./fsutil.js');
 
 const LOG_ROOT = process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects');
 const DATA_DIR = process.env.TT_DATA_DIR || path.join(__dirname, 'data');
@@ -45,16 +46,10 @@ function readJSON(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 
+// Ghi atomic qua fsutil.js (Windows khoá file vừa ghi thì thử lại vài lần). Hỏng hẳn thì ném lỗi: người gọi
+// quyết định bỏ qua (usage.json, alerts.json — lần sau ghi lại) hay báo lỗi (cài đặt, ghép hub).
 function writeJSON(file, data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data));
-  try {
-    fs.renameSync(tmp, file);
-  } catch {
-    // Windows có thể khoá file khi tiến trình khác đang đọc; lần sau sẽ ghi lại.
-    try { fs.unlinkSync(tmp); } catch {}
-  }
+  writeAtomicSync(file, JSON.stringify(data));
 }
 
 const loadConfig = () => ({ ...DEFAULT_CONFIG, ...readJSON(CONFIG_FILE, {}) });
@@ -197,9 +192,13 @@ const USAGE_EVERY_MS = 5 * MIN;   // tài khoản không nằm trong file đăng
 const USAGE_ACTIVE_MS = MIN;      // tài khoản đang dùng: gần như theo thời gian thực
 const USAGE_TICK_MS = 20e3;
 const STALE_MS = 10 * MIN;
+// Anthropic trả lỗi (429 hỏi quá dày, 401 token bị thu hồi, 5xx…) -> token đó chờ hết một chu kỳ (hoặc theo
+// Retry-After) mới hỏi lại, thay vì 20 giây một lần. Lỗi mạng thì không chờ: có mạng lại là hỏi ngay.
+const usageRetryAt = new Map();   // accessToken -> thời điểm được hỏi lại
 
 async function refreshUsage(now = Date.now(), fetchImpl = globalThis.fetch) {
   const updated = [];
+  for (const [k, t] of usageRetryAt) if (t <= now) usageRetryAt.delete(k);
   let fileId = null, fileOauth = null;
   try { const l = accounts.readLogin(); fileId = l.id; fileOauth = l.cred.claudeAiOauth; } catch {}
   for (const p of accounts.listProfiles()) {
@@ -209,12 +208,17 @@ async function refreshUsage(now = Date.now(), fetchImpl = globalThis.fetch) {
     if (!oauth || !oauth.accessToken || !(oauth.expiresAt > now + MIN)) continue;
     const every = p.id === fileId ? USAGE_ACTIVE_MS : USAGE_EVERY_MS;
     if (p.usage && p.usage.fetchedAtMs > now - every + 5e3) continue;
+    if (usageRetryAt.has(oauth.accessToken)) continue;
     try {
       const res = await fetchImpl(USAGE_URL, {
         headers: { Authorization: `Bearer ${oauth.accessToken}`, 'anthropic-beta': 'oauth-2025-04-20' },
         signal: AbortSignal.timeout(10e3),
       });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        const ra = Number(res.headers && typeof res.headers.get === 'function' ? res.headers.get('retry-after') : NaN);
+        usageRetryAt.set(oauth.accessToken, now + (ra > 0 ? Math.min(ra * 1e3, HOUR) : every));
+        continue;
+      }
       const util = await res.json();
       if (!util || (typeof util.five_hour !== 'object' && typeof util.seven_day !== 'object')) continue;
       accounts.setUsage(p.id, util, now);
@@ -303,7 +307,7 @@ function scan() {
       if (A.startOfDay(rec.t) >= cutoff) addDaily(store.daily, rec, entries);
     }
     store.lastScan = now;
-    writeJSON(STORE_FILE, store);
+    try { writeJSON(STORE_FILE, store); } catch (err) { console.error('usage.json:', err.message); }   // lần quét sau ghi lại
   }
   return store;
 }
@@ -464,7 +468,7 @@ function checkAlerts() {
 
   if (dirty) {
     for (const [k, t] of Object.entries(st.sent)) if (t < now - 8 * DAY) delete st.sent[k];
-    writeJSON(ALERTS_FILE, st);
+    try { writeJSON(ALERTS_FILE, st); } catch (err) { console.error('alerts.json:', err.message); }
   }
 }
 
@@ -584,7 +588,8 @@ function saveConfig(patch) {
       if (Number.isFinite(n) && n >= 0) cfg[k] = n;
     }
   }
-  writeJSON(CONFIG_FILE, cfg);
+  // không ghi được thì báo lỗi, không trả cài đặt mới như thể đã lưu
+  try { writeJSON(CONFIG_FILE, cfg); } catch (err) { throw new remote.RemoteError('WRITE_FAILED', `Không lưu được cài đặt: ${err.message}`); }
   return cfg;
 }
 
@@ -685,7 +690,13 @@ async function hubApi(req, url, json) {
       body: JSON.stringify({ username: body.username, password: body.password, machineName: name }),
     });
     if (!r.ok || !r.j.machineToken) throw new remote.RemoteError(r.j.error || 'HUB_ERROR', r.j.message || 'Hub từ chối ghép máy');
-    writeJSON(HUB_FILE, { hubUrl, machineId: r.j.machineId, machineToken: r.j.machineToken, name: r.j.name || name, pairedAt: Date.now() });
+    try {
+      writeJSON(HUB_FILE, { hubUrl, machineId: r.j.machineId, machineToken: r.j.machineToken, name: r.j.name || name, pairedAt: Date.now() });
+    } catch (err) {
+      // không lưu được khoá máy -> thu hồi ngay trên hub, không để lại máy "ma" (tắt mãi) trong app
+      await hubFetch(`${hubUrl}/v1/machines/unpair`, { method: 'POST', headers: { Authorization: `Bearer ${r.j.machineToken}` } }).catch(() => {});
+      throw new remote.RemoteError('WRITE_FAILED', `Không lưu được data/hub.json: ${err.message}`);
+    }
     startHubLink();
   } else {
     const d = readJSON(HUB_FILE, null);

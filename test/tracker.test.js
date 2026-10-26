@@ -386,6 +386,20 @@ test('API: POST /api/config và /api/test-notify chặn CSRF, JSON sai trả 400
   });
 });
 
+test('API: không ghi được config.json -> báo lỗi WRITE_FAILED, không trả cài đặt mới như đã lưu', async () => {
+  reset();
+  seed();
+  fs.mkdirSync(path.join(env.dataDir, 'config.json'));   // tên file bị một thư mục chiếm -> đổi tên file tạm luôn lỗi
+  try {
+    await withServer(async ({ call }) => {
+      const r = await call('POST', '/api/config', { body: JSON.stringify({ budgetDay: 9 }), headers: CSRF });
+      assert.equal(r.status, 400);
+      assert.equal(r.json().error, 'WRITE_FAILED');
+      assert.deepEqual(fs.readdirSync(env.dataDir).filter((f) => f.endsWith('.tmp')), [], 'không để lại file tạm');
+    });
+  } finally { fs.rmSync(path.join(env.dataDir, 'config.json'), { recursive: true, force: true }); }
+});
+
 test('API: /api/* chỉ nhận Host là loopback đúng cổng (chống DNS rebinding); /metrics và trang tĩnh thì không kiểm tra', async () => {
   reset();
   writeTurns();
@@ -506,6 +520,32 @@ test('refreshUsage: tài khoản đang trong file hỏi lại sau ~1 phút, tài
   const calls2 = [];
   await T.refreshUsage(t + 5 * 60e3 + 1e3, okFetch({ 'at-1': util(12, 12), 'at-2': util(22, 22) }, calls2));
   assert.deepEqual(calls2.sort(), ['at-1', 'at-2']);
+});
+
+test('refreshUsage: Anthropic trả lỗi (429, 401…) -> token đó chờ Retry-After hoặc một chu kỳ, không hỏi lại mỗi 20 giây', async () => {
+  reset();
+  seed({ loginAs: 2 });   // acc-2 trong file (hỏi mỗi phút), acc-1 là hồ sơ khác (5 phút)
+  const t = Date.now();
+  const calls = [];
+  const failing = async (url, opts) => {
+    const tok = opts.headers.Authorization.replace('Bearer ', '');
+    calls.push(tok);
+    return tok === 'at-2'
+      ? { ok: false, status: 429, headers: new Headers({ 'retry-after': '120' }), json: async () => ({}) }
+      : { ok: false, status: 401, json: async () => ({}) };
+  };
+  await T.refreshUsage(t, failing);
+  assert.deepEqual(calls.sort(), ['at-1', 'at-2']);
+  calls.length = 0;
+  await T.refreshUsage(t + 20e3, failing);   // lần tick kế: không hỏi lại
+  await T.refreshUsage(t + 90e3, failing);   // acc-2 vẫn trong Retry-After 120 giây (dù chu kỳ chỉ 1 phút)
+  assert.deepEqual(calls, []);
+  await T.refreshUsage(t + 121e3, okFetch({ 'at-2': util(30, 30) }, calls));
+  assert.deepEqual(calls, ['at-2'], 'hết Retry-After thì hỏi lại; acc-1 (401) vẫn chờ đủ 5 phút');
+  assert.equal(acc.loadProfile('acc-2').usage.utilization.five_hour.utilization, 30);
+  calls.length = 0;
+  await T.refreshUsage(t + 5 * 60e3 + 1e3, okFetch({ 'at-1': util(5, 5), 'at-2': util(31, 31) }, calls));
+  assert.ok(calls.includes('at-1'));
 });
 
 // ---- ghép PC với hub (VPS) ----

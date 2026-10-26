@@ -77,13 +77,16 @@ function createWeb({ db, router, checkLogin, HubError, readJson, clientIp }) {
       return { ok: true };
     },
     'POST /v1/web/machines/rename': ({ user }, b) => {
-      if (!db.renameMachine(user.id, String(b.id || ''), String(b.name || '').slice(0, 60))) throw new HubError('NOT_FOUND', 'Không có máy này', 404);
+      const id = String(b.id || '');
+      if (!db.renameMachine(user.id, id, String(b.name || '').slice(0, 60))) throw new HubError('NOT_FOUND', 'Không có máy này', 404);
+      router.machineChanged(user.id, id);   // app đang mở thấy tên mới ngay
       return { ok: true };
     },
     'POST /v1/web/machines/revoke': ({ user }, b, ip) => {
       const id = String(b.id || '');
       if (!db.revokeMachine(user.id, id)) throw new HubError('NOT_FOUND', 'Không có máy này', 404);
       router.closeWhere((c) => c.role === 'agent' && c.machineId === id);
+      router.machineChanged(user.id, id);   // app đang mở bỏ máy khỏi danh sách ngay
       db.audit(user.id, ip, 'machine_revoke', id);
       return { ok: true };
     },

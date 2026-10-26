@@ -33,8 +33,11 @@ final class HubClient {
     private var stopped = false
     private var attempt = 0
     private var foreground = true
+    /// app chạy nền và tự báo được (thông báo local) -> hub thôi đẩy ntfy cho sự kiện của phiên, khỏi báo trùng
+    private var notifies = false
     @ObservationIgnored private var pending: [String: CheckedContinuation<Data, Error>] = [:]
-    @ObservationIgnored private var subs: [String: AsyncThrowingStream<Data, Error>.Continuation] = [:]   // "machine:session"
+    /// "machine:session" -> luồng đang xem; token phân biệt luồng cũ / mới của cùng một phiên
+    @ObservationIgnored private var subs: [String: (token: UUID, c: AsyncThrowingStream<Data, Error>.Continuation)] = [:]
     @ObservationIgnored private var parts: [String: (next: Int, data: Data)] = [:]
     @ObservationIgnored private var welcomeWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     private let session = URLSession(configuration: .default)
@@ -62,9 +65,10 @@ final class HubClient {
         releaseWaiters()
     }
 
-    func setForeground(_ fg: Bool) {
+    func setForeground(_ fg: Bool, notifies: Bool = false) {
         foreground = fg
-        sendJSON(["type": "presence", "foreground": fg])
+        self.notifies = notifies
+        sendJSON(["type": "presence", "foreground": fg, "notifies": notifies])
         if fg && task == nil && !stopped { attempt = 0; connect() }
     }
 
@@ -159,7 +163,7 @@ final class HubClient {
         p.values.forEach { $0.resume(throwing: e) }
         let s = subs
         subs = [:]
-        s.values.forEach { $0.finish(throwing: e) }
+        s.values.forEach { $0.c.finish(throwing: e) }
         parts = [:]
     }
 
@@ -175,7 +179,7 @@ final class HubClient {
             if let u = m["user"] as? [String: Any] { username = u["username"] as? String }
             if let n = m["ntfy"] as? [String: Any] { ntfySubscribe = n["subscribe"] as? String }
             machines = (m["machines"] as? [[String: Any]] ?? []).compactMap(Self.machine)
-            sendJSON(["type": "presence", "foreground": foreground])
+            sendJSON(["type": "presence", "foreground": foreground, "notifies": notifies])
             releaseWaiters()
         case "res":
             guard let id = m["id"] as? String, let c = pending.removeValue(forKey: id) else { return }
@@ -191,7 +195,7 @@ final class HubClient {
             let sessionId = m["session"] as? String ?? ""
             guard let d = m["data"] as? [String: Any] else { return }
             if d["kind"] as? String == "sessions" { onSessionsChanged?(machine); return }
-            if let c = subs["\(machine):\(sessionId)"], let raw = try? JSONSerialization.data(withJSONObject: d) {
+            if let c = subs["\(machine):\(sessionId)"]?.c, let raw = try? JSONSerialization.data(withJSONObject: d) {
                 c.yield(raw)
             }
         case "machine":
@@ -202,8 +206,8 @@ final class HubClient {
             }
             if m["online"] as? Bool == false {
                 // máy rớt: kết thúc các luồng phiên của máy đó -> SessionModel tự nối lại khi máy online
-                for (k, c) in subs where k.hasPrefix(id + ":") {
-                    c.finish(throwing: APIError(code: "OFFLINE", message: "Máy tính đang tắt hoặc mất mạng"))
+                for (k, sub) in subs where k.hasPrefix(id + ":") {
+                    sub.c.finish(throwing: APIError(code: "OFFLINE", message: "Máy tính đang tắt hoặc mất mạng"))
                     subs[k] = nil
                 }
             }
@@ -211,8 +215,8 @@ final class HubClient {
             if let code = m["code"] as? String, let pid = m["pid"] as? String {
                 // tin lớn bị từ chối: báo cho lời gọi đang chờ (id nằm trong pid)
                 if let c = pending.removeValue(forKey: pid) { c.resume(throwing: Self.apiError(code, m["message"] as? String)) }
-            } else if let machine = m["machine"] as? String, let s = m["session"] as? String, let c = subs.removeValue(forKey: "\(machine):\(s)") {
-                c.finish(throwing: Self.apiError(m["code"] as? String ?? "ERROR", m["message"] as? String))
+            } else if let machine = m["machine"] as? String, let s = m["session"] as? String, let sub = subs.removeValue(forKey: "\(machine):\(s)") {
+                sub.c.finish(throwing: Self.apiError(m["code"] as? String ?? "ERROR", m["message"] as? String))
             } else {
                 lastError = m["message"] as? String
             }
@@ -298,25 +302,33 @@ final class HubClient {
     }
 
     /// Theo dõi một phiên: phát lại sự kiện sau `after` rồi sự kiện mới (giống SSE của đường cũ).
+    /// Mỗi luồng có token riêng: luồng cũ của cùng phiên kết thúc muộn (mở lại phiên, bấm thông báo khi đang xem)
+    /// không được gỡ nhầm luồng mới — không thì màn phiên đứng im, không nhận sự kiện nữa.
     func subscribe(machine: String, session sid: String, after: Int, epoch: String) -> AsyncThrowingStream<Data, Error> {
         let key = "\(machine):\(sid)"
+        let token = UUID()
         return AsyncThrowingStream { c in
-            Task { @MainActor in
-                if !self.connected { await self.ready() }
-                guard self.connected else { c.finish(throwing: APIError(code: "NETWORK", message: self.lastError ?? "Chưa kết nối được hub")); return }
-                guard self.machines.contains(where: { $0.id == machine && $0.online }) else {
-                    c.finish(throwing: APIError(code: "OFFLINE", message: "Máy tính đang tắt hoặc mất mạng")); return
-                }
-                self.subs[key]?.finish()
-                self.subs[key] = c
-                self.sendJSON(["type": "sub", "machine": machine, "session": sid, "after": after, "epoch": epoch])
-            }
             c.onTermination = { _ in
                 Task { @MainActor in
-                    guard self.subs[key] != nil else { return }
+                    guard self.subs[key]?.token == token else { return }
                     self.subs[key] = nil
                     self.sendJSON(["type": "unsub", "machine": machine, "session": sid])
                 }
+            }
+            Task { @MainActor in
+                self.subs[key]?.c.finish()
+                self.subs[key] = (token: token, c: c)   // ghi trước khi chờ nối: thôi xem trong lúc chờ thì onTermination gỡ được
+                if !self.connected { await self.ready() }
+                guard self.subs[key]?.token == token else { return }   // đã thôi xem / bị luồng mới thay trong lúc chờ
+                guard self.connected else {
+                    self.subs[key] = nil
+                    c.finish(throwing: APIError(code: "NETWORK", message: self.lastError ?? "Chưa kết nối được hub")); return
+                }
+                guard self.machines.contains(where: { $0.id == machine && $0.online }) else {
+                    self.subs[key] = nil
+                    c.finish(throwing: APIError(code: "OFFLINE", message: "Máy tính đang tắt hoặc mất mạng")); return
+                }
+                self.sendJSON(["type": "sub", "machine": machine, "session": sid, "after": after, "epoch": epoch])
             }
         }
     }

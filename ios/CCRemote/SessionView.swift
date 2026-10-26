@@ -56,12 +56,12 @@ struct SessionView: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) { banner }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
-        .navigationTitle(model.summary?.title ?? app.title(for: model.id))
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
-                    Text(model.summary?.title ?? app.title(for: model.id))
+                    Text(title)
                         .font(.subheadline.weight(.semibold)).lineLimit(1)
                     HStack(spacing: 5) {
                         Circle().fill(model.connected ? Color.green : Color.gray).frame(width: 6, height: 6)
@@ -102,6 +102,12 @@ struct SessionView: View {
             CameraPicker { img in if picks.count < ImagePrep.maxCount { picks.append(PickedImage(image: img)) } }
                 .ignoresSafeArea()
         }
+    }
+
+    /// phiên mới mở bằng ảnh (chưa có chữ) có tiêu đề rỗng -> lấy tên trong danh sách phiên
+    private var title: String {
+        if let t = model.summary?.title, !t.isEmpty { return t }
+        return app.title(for: model.id)
     }
 
     private var subtitle: String {

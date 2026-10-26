@@ -24,6 +24,11 @@ function createRouter({ db, rpcTimeoutMs = 30e3, helloTimeoutMs = 10e3, notifier
     const m = db.machine(userId, machineId);
     if (m) for (const a of appsOf(userId)) send(a, { type: 'machine', ...machineView(m) });
   };
+  // máy đổi tên / bị thu hồi (từ app hoặc trang web): báo các app của người đó ngay, không đợi app nối lại
+  const machineChanged = (userId, machineId) => {
+    if (db.machine(userId, machineId)) return announce(userId, machineId);
+    for (const a of appsOf(userId)) send(a, { type: 'machine', id: machineId, removed: true, online: false });
+  };
   const closeConn = (c, code, reason = '') => { try { c.ws.close(code, reason); } catch {} };
   const closeWhere = (pred, code = CLOSE.UNAUTHORIZED) => { for (const c of conns.values()) if (c.authed && pred(c)) closeConn(c, code, 'revoked'); };
 
@@ -43,13 +48,13 @@ function createRouter({ db, rpcTimeoutMs = 30e3, helloTimeoutMs = 10e3, notifier
     machines: (c) => db.machines(c.userId).map(machineView),
     'machines.rename': (c, p) => {
       if (!db.renameMachine(c.userId, str(p.id, 64), str(p.name, 60))) throw NOT_FOUND;
-      announce(c.userId, p.id);
+      machineChanged(c.userId, p.id);
       return { ok: true };
     },
     'machines.revoke': (c, p) => {
       if (!db.revokeMachine(c.userId, str(p.id, 64))) throw NOT_FOUND;
       closeWhere((x) => x.role === 'agent' && x.machineId === p.id);
-      for (const a of appsOf(c.userId)) send(a, { type: 'machine', id: p.id, removed: true, online: false });
+      machineChanged(c.userId, p.id);
       return { ok: true };
     },
     password: async (c, p) => {
@@ -105,7 +110,8 @@ function createRouter({ db, rpcTimeoutMs = 30e3, helloTimeoutMs = 10e3, notifier
 
   // ---------- tin chữ ----------
   async function fromApp(c, m) {
-    if (m.type === 'presence') { c.foreground = !!m.foreground; return; }
+    // foreground: đang mở app; notifies: app chạy nền và tự bắn thông báo trên máy (hub thôi đẩy ntfy sự kiện phiên)
+    if (m.type === 'presence') { c.foreground = !!m.foreground; c.notifies = !!m.notifies; return; }
     if (m.type === 'req') {
       const id = str(m.id, 100);
       const reply = (ok, v) => send(c, { type: 'res', id, machine: m.machine, ok, ...(ok ? { result: v } : { error: v }) });
@@ -195,7 +201,7 @@ function createRouter({ db, rpcTimeoutMs = 30e3, helloTimeoutMs = 10e3, notifier
 
   // ---------- vòng đời kết nối ----------
   function attach(ws, ip = '') {
-    const c = { id: crypto.randomBytes(8).toString('hex'), ws, ip, authed: false, subs: new Set(), parts: new Map(), foreground: false, lastPong: Date.now() };
+    const c = { id: crypto.randomBytes(8).toString('hex'), ws, ip, authed: false, subs: new Set(), parts: new Map(), foreground: false, notifies: false, lastPong: Date.now() };
     conns.set(c.id, c);
     c.helloTimer = setTimeout(() => { if (!c.authed) closeConn(c, CLOSE.HELLO, 'hello'); }, helloTimeoutMs);
     ws.on('pong', () => { c.lastPong = Date.now(); });
@@ -263,7 +269,7 @@ function createRouter({ db, rpcTimeoutMs = 30e3, helloTimeoutMs = 10e3, notifier
     pending.clear();
   }
 
-  return { attach, recheck, heartbeat, closeWhere, shutdown, conns, agents, appsOf, PING_MS };
+  return { attach, recheck, heartbeat, closeWhere, machineChanged, shutdown, conns, agents, appsOf, PING_MS };
 }
 
 module.exports = { createRouter, CLOSE };

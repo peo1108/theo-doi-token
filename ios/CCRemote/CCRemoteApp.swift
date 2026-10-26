@@ -12,13 +12,18 @@ struct CCRemoteApp: App {
                 .onOpenURL { app.open(url: $0) }
         }
         .onChange(of: phase) { _, p in
-            app.hub?.setForeground(p == .active)   // hub chỉ đẩy ntfy khi không app nào đang mở
             if p == .active {
                 KeepAlive.shared.stop()
-                Task { await app.refresh() }
+                Task {
+                    await Notifier.shared.refreshAuthorization()   // có thể vừa bật thông báo trong Cài đặt iPhone
+                    await app.refresh()
+                }
             } else if p == .background, app.isPaired {
                 KeepAlive.shared.start()   // giữ app chạy nền để vẫn báo khi khoá màn hình
             }
+            // hub chỉ đẩy ntfy khi không app nào đang mở; app còn chạy nền và tự báo được thì hub thôi đẩy
+            // sự kiện của phiên (xin quyền, xong việc…) để không báo trùng hai lần
+            app.hub?.setForeground(p == .active, notifies: p != .active && KeepAlive.shared.running && Notifier.shared.canNotify)
         }
     }
 }

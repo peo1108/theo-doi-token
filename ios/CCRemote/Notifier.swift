@@ -18,6 +18,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let status: String
         let pending: Int
         let rejected: Bool
+        /// phiên VS Code / terminal trên máy: chỉ báo khi đang điều khiển từ điện thoại hoặc máy để yên (như hub)
+        let remote: Bool
     }
 
     private var last: [String: Snap] = [:]
@@ -28,6 +30,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "notifyOn") }
     }
 
+    /// iPhone đã cho phép hiện thông báo của app (cập nhật khi mở app / xin quyền)
+    private(set) var authorized = false
+    /// bật trong app và được iPhone cho phép -> app tự báo được khi chạy nền
+    var canNotify: Bool { enabled && authorized }
+
     func setup(app: AppModel) {
         self.app = app
         UNUserNotificationCenter.current().delegate = self
@@ -35,25 +42,35 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     @discardableResult
     func requestPermission() async -> Bool {
-        (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+        let ok = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+        await refreshAuthorization()
+        return ok
     }
 
     func authorizationStatus() async -> UNAuthorizationStatus {
         await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
+    func refreshAuthorization() async {
+        let s = await authorizationStatus()
+        authorized = s == .authorized || s == .provisional || s == .ephemeral
+    }
+
     /// So trạng thái mới với lần trước, báo các thay đổi đáng chú ý.
     func process(_ state: RemoteState) {
         var next: [String: Snap] = [:]
         for s in state.live {
-            let snap = Snap(status: s.status, pending: s.pending, rejected: s.rate?.status == "rejected")
+            let remote = s.external != true || s.attached == true || s.pcAway == true
+            let snap = Snap(status: s.status, pending: s.pending, rejected: s.rate?.status == "rejected", remote: remote)
             next[s.id] = snap
             guard primed, enabled, let old = last[s.id] else { continue }
             if watching(s.id) { continue }
+            // đang ngồi máy làm việc trong VS Code: không rung điện thoại; rời máy mà câu hỏi vẫn chờ thì báo lúc đó
+            if !remote { continue }
             let title = s.title?.isEmpty == false ? s.title! : (s.project ?? "Phiên Claude")
             let wasBusy = old.status == "running" || old.status == "starting" || old.status == "waiting"
 
-            if snap.pending > old.pending {
+            if snap.pending > 0 && (snap.pending > old.pending || !old.remote) {
                 let tool = s.ask?.tool ?? ""
                 let head = tool == "AskUserQuestion" ? "🙋 Claude đang hỏi m"
                     : tool == "ExitPlanMode" ? "📋 Kế hoạch chờ duyệt"
@@ -113,6 +130,9 @@ final class KeepAlive {
         get { UserDefaults.standard.object(forKey: "keepAlive") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "keepAlive"); if !newValue { stop() } }
     }
+
+    /// đang phát âm thanh im lặng (app được giữ chạy nền)
+    var running: Bool { player != nil }
 
     func start() {
         guard enabled, player == nil else { return }

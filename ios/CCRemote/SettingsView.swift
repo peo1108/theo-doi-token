@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var notifyOn = Notifier.shared.enabled
     @State private var keepAlive = KeepAlive.shared.enabled
     @State private var notifyStatus: UNAuthorizationStatus = .notDetermined
+    @State private var alwaysOnError: String?
 
     var body: some View {
         NavigationStack {
@@ -40,8 +41,16 @@ struct SettingsView: View {
                 Section {
                     Toggle("Luôn sẵn sàng nhận lệnh", isOn: Binding(
                         get: { app.state?.alwaysOn ?? true },
-                        set: { v in Task { try? await app.setAlwaysOn(v) } }
+                        set: { v in
+                            Task {
+                                do { try await app.setAlwaysOn(v); alwaysOnError = nil }
+                                catch { alwaysOnError = (error as? APIError)?.message ?? error.localizedDescription }
+                            }
+                        }
                     ))
+                    if let alwaysOnError {
+                        Label(alwaysOnError, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
+                    }
                 } header: {
                     Text("Phiên VS Code / terminal")
                 } footer: {

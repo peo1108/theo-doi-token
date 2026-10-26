@@ -12,7 +12,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
-const { writeAtomic } = require('./fsutil.js');
+const { writeAtomic, writeAtomicSync } = require('./fsutil.js');
 
 const MIN = 60e3;
 const VERSION = 1;
@@ -74,12 +74,9 @@ function hookKey() {
   return d.hookKey;
 }
 
+// Ghi atomic, Windows khoá file thì thử lại (fsutil.js).
 function save(d) {
-  const file = remoteFile();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(d, null, 1));
-  fs.renameSync(tmp, file);
+  writeAtomicSync(remoteFile(), JSON.stringify(d, null, 1));
 }
 
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
@@ -90,7 +87,9 @@ let claudeCache;
 function findClaude() {
   const env = process.env.CLAUDE_BIN;
   if (env) return /\.[cm]?js$/.test(env) ? { cmd: process.execPath, pre: [env] } : { cmd: env, pre: [] };
-  if (claudeCache) return claudeCache;
+  // cài lại / đổi cách cài Claude Code có thể đổi chỗ exe -> nhớ đường dẫn nhưng kiểm tra lại trước khi dùng
+  if (claudeCache && fs.existsSync(claudeCache.cmd)) return claudeCache;
+  claudeCache = null;
   const win = process.platform === 'win32';
   const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
   dirs.push(path.join(os.homedir(), '.local', 'bin'));
@@ -369,24 +368,28 @@ function readTranscript(file, { limit = 400, epoch = '', refs } = {}) {
   return { events: events.slice(-limit), end };
 }
 
-// Thông tin ngắn của một file phiên: cwd, tiêu đề (ai-title, nếu không có thì lời nhắn đầu). Có cache theo mtime.
+// Thông tin ngắn của một file phiên: cwd, tiêu đề (tên đặt bằng /rename, rồi tới ai-title, không có thì lời nhắn đầu).
+// Claude Code ghi lại ai-title cả sau custom-title -> tên người dùng đặt luôn thắng, không phụ thuộc thứ tự. Cache theo mtime.
 const metaCache = new Map();
 function sessionMeta(file, st) {
   const key = `${st.mtimeMs}:${st.size}`;
   const c = metaCache.get(file);
   if (c && c.key === key) return c.meta;
   const head = readLines(file, st.size > 512e3 ? 160e3 : 0);   // đầu file đủ để lấy cwd + lời nhắn đầu
-  let cwd = null, first = null, title = null;
+  let cwd = null, first = null, aiTitle = null, customTitle = null;
+  const titleOf = (m) => {
+    if (m.type === 'ai-title' && m.aiTitle) aiTitle = m.aiTitle;
+    if (m.type === 'custom-title' && m.customTitle) customTitle = m.customTitle;
+  };
   for (const m of head) {
     if (!cwd && m.cwd && !m.isSidechain) cwd = m.cwd;
-    if (m.type === 'ai-title' && m.aiTitle) title = m.aiTitle;
-    if (m.type === 'custom-title' && m.customTitle) title = m.customTitle;
+    titleOf(m);
     if (!first && m.type === 'user' && !m.isMeta && !m.isSidechain) {
       const u = normalize(m).find((e) => e.kind === 'user');
       if (u) first = u.text;
     }
   }
-  if (st.size > 512e3) {   // tiêu đề AI thường nằm ở cuối file
+  if (st.size > 512e3) {   // tiêu đề thường nằm ở cuối file
     try {
       const fd = fs.openSync(file, 'r');
       const len = Math.min(256e3, st.size);
@@ -395,11 +398,11 @@ function sessionMeta(file, st) {
       fs.closeSync(fd);
       for (const line of buf.toString('utf8').split('\n')) {
         if (!line.includes('"ai-title"') && !line.includes('"custom-title"')) continue;
-        try { const m = JSON.parse(line); title = m.customTitle || m.aiTitle || title; } catch {}
+        try { titleOf(JSON.parse(line)); } catch {}
       }
     } catch {}
   }
-  const meta = { cwd, title: clip(plain(title || first) || '(chưa có lời nhắn)', 100) };
+  const meta = { cwd, custom: !!customTitle, title: clip(plain(customTitle || aiTitle || first) || '(chưa có lời nhắn)', 100) };
   metaCache.set(file, { key, meta });
   return meta;
 }
@@ -434,9 +437,10 @@ const dirKey = (p) => String(p || '').toLowerCase().replace(/[\\/]+$/, '');
 const sameDir = (a, b) => dirKey(a) === dirKey(b);
 
 // Dự án = thư mục đã mở Claude Code, mới dùng trước; kèm số phiên. Thư mục đã xoá thì bỏ.
-function projects(limit = 40) {
+// sessions: danh sách recentSessions(400) có sẵn (state() dùng chung, khỏi quét thư mục lịch sử hai lần).
+function projects(limit = 40, sessions = recentSessions(400)) {
   const seen = new Map();
-  for (const s of recentSessions(400)) {
+  for (const s of sessions) {
     const k = dirKey(s.cwd);
     const p = seen.get(k) || { cwd: s.cwd, name: s.project, lastUsed: s.updatedAt, count: 0, lastTitle: s.title };
     p.count++;
@@ -668,6 +672,7 @@ class Session {
     this.inflight = 0;
     this.rate = null;
     this.title = '';
+    this.titleCustom = false;   // tên đặt bằng /rename: ai-title ghi sau không đè
     this.lastText = '';
     this.cost = 0;
     this.updatedAt = Date.now();
@@ -744,6 +749,7 @@ class Session {
     const meta = sessionMeta(f, st);
     this.cwd = this.cwd || meta.cwd;
     this.title = meta.title;
+    this.titleCustom = meta.custom;
     this.events = [];
     this.seq = 0;
     this.epoch = newEpoch();
@@ -781,7 +787,8 @@ class Session {
     this.tailRest = cut < 0 ? buf : buf.subarray(cut + 1);
     if (cut < 0) return;
     eachLine(buf, cut, (m, at, len) => {
-      if (m.type === 'ai-title' && m.aiTitle) this.title = clip(plain(m.aiTitle), 100);
+      if (m.type === 'custom-title' && m.customTitle) { this.titleCustom = true; this.title = clip(plain(m.customTitle), 100); }
+      else if (m.type === 'ai-title' && m.aiTitle && !this.titleCustom) this.title = clip(plain(m.aiTitle), 100);
       if (m.type === 'queue-operation' && m.operation === 'enqueue' && this.bridge && this.bridge.parked
         && (Date.parse(m.timestamp) || Date.now()) >= this.bridge.parked.since - 1000) {
         this.release({ action: 'continue' });   // nhường cho tin vừa gõ trong VS Code
@@ -1376,14 +1383,16 @@ function createHub(ctx = {}) {
       }
       s.release({ action: 'continue' });   // hook cũ còn treo (hiếm) -> thả
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.flushHeaders();   // hook biết đã được nhận: tracker tắt giữa chừng thì nó chờ tracker lên lại rồi đứng chờ tiếp
       const w = { res, since: Date.now(), keepAlive: setInterval(() => { try { res.write(' '); } catch {} }, 20e3) };
       br.parked = w;
       req.on('close', () => {
         if (br.parked === w) { br.parked = null; clearInterval(w.keepAlive); s.broadcastState(); }
       });
       s.broadcastState();
-      // báo khi người dùng không ở máy (đang điều khiển từ điện thoại hoặc máy để yên)
-      if (s.clients.size === 0 && (br.attached || hub.pcAway())) hub.notify(`Xong · ${s.label()}`, clip(b.last || s.lastText, 180), s.id);
+      // báo khi người dùng không ở máy (đang điều khiển từ điện thoại hoặc máy để yên); hook đứng chờ lại sau khi tracker
+      // khởi động lại (rearm) thì lượt đó đã báo rồi
+      if (!b.rearm && s.clients.size === 0 && (br.attached || hub.pcAway())) hub.notify(`Xong · ${s.label()}`, clip(b.last || s.lastText, 180), s.id);
     },
     // Hook PermissionRequest chạy song song với hộp thoại trong VS Code: bên nào trả lời trước thì được.
     // Đang điều khiển từ điện thoại / rời máy / luôn sẵn sàng -> hiện cả trên điện thoại; chỉ đẩy thông báo khi không
@@ -1495,11 +1504,12 @@ function createHub(ctx = {}) {
       const live = [...sessions.values()].filter((s) => s.proc || s.pending.size || recentBridge(s)).map((s) => s.summary())
         .sort((a, b) => b.updatedAt - a.updatedAt);
       const liveIds = new Set(live.map((s) => s.id));
+      const all = recentSessions(400);
       return {
         version: VERSION, host: os.hostname(), now: Date.now(),
         live,
-        recent: recentSessions(40).filter((s) => !liveIds.has(s.id)),
-        projects: projects(40).map((p) => ({ ...p, live: live.filter((l) => sameDir(l.cwd, p.cwd)).length })),
+        recent: all.slice(0, 40).filter((s) => !liveIds.has(s.id)),
+        projects: projects(40, all).map((p) => ({ ...p, live: live.filter((l) => sameDir(l.cwd, p.cwd)).length })),
         accounts: info && info.accounts ? {
           active: info.active, conflict: !!info.conflict,
           list: info.accounts.map((a) => ({
@@ -1675,8 +1685,30 @@ function createRemoteServer(hub) {
 }
 
 // In thời gian máy không có thao tác (GetLastInputInfo) mỗi 2 giây; dùng để biết người dùng còn ngồi ở máy không.
+// Tiến trình đo bị tắt giữa chừng -> coi như chưa biết (không treo số cũ mãi) rồi mở lại, chết liên tục thì chờ lâu dần.
 function startIdleWatcher(hub) {
   if (process.platform !== 'win32') return null;
+  let proc = null, stopped = false, wait = 5e3;
+  const run = () => {
+    if (stopped) return;
+    const started = Date.now();
+    proc = spawnIdleProbe(hub);
+    if (!proc) return;
+    proc.on('exit', () => {
+      proc = null;
+      if (stopped) return;
+      hub.setIdle(null);
+      wait = Date.now() - started > 60e3 ? 5e3 : Math.min(wait * 2, 5 * MIN);
+      setTimeout(run, wait).unref();
+    });
+  };
+  run();
+  const stop = () => { stopped = true; try { if (proc) proc.kill(); } catch {} };
+  process.once('exit', stop);
+  return { stop };
+}
+
+function spawnIdleProbe(hub) {
   const script = [
     'Add-Type @"',
     'using System; using System.Runtime.InteropServices;',
@@ -1705,7 +1737,6 @@ function startIdleWatcher(hub) {
       if (Number.isFinite(n)) hub.setIdle(n);
     }
   });
-  process.once('exit', () => { try { proc.kill(); } catch {} });
   return proc;
 }
 
@@ -1720,7 +1751,7 @@ function start(ctx = {}) {
     if (err.code === 'EADDRINUSE') console.log(`Remote: cổng ${REMOTE_PORT} đang được dùng — bỏ qua`);
     else console.error('remote:', err.message);
   });
-  server.listen(REMOTE_PORT, REMOTE_HOST, () => console.log(`Remote (app iOS): http://${REMOTE_HOST}:${REMOTE_PORT}`));
+  server.listen(REMOTE_PORT, REMOTE_HOST, () => console.log(`Hook VS Code / terminal: http://${REMOTE_HOST}:${REMOTE_PORT}`));
   setInterval(() => hub.sweep(), MIN).unref();
   startIdleWatcher(hub);
   const bye = () => { hub.shutdown(); process.exit(0); };
@@ -1735,7 +1766,17 @@ function start(ctx = {}) {
 const claudeDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const HOOK_SCRIPT = path.join(__dirname, 'hook.js').replace(/\\/g, '/');
 const hookCmd = (ev) => `node "${HOOK_SCRIPT}" ${ev}`;
-const isOurHook = (h) => h && typeof h.command === 'string' && h.command.includes('hook.js') && h.command.includes(path.basename(__dirname));
+// Windows không phân biệt hoa thường trong đường dẫn (c:/… và C:/… là một)
+const sameCmd = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+// Hook của mình = đúng dạng lệnh hookCmd. Lệnh trỏ tới thư mục khác (đã chuyển / xoá thư mục tool) vẫn là của mình khi
+// hook.js ở đó không còn hoặc chính là hook CC Remote -> lần cài sau dọn được, không để Claude Code báo lỗi hook mỗi lượt.
+const HOOK_CMD_RE = /^node "(.+\/hook\.js)" (stop|session|permission|prompt|pretool|tool)$/;
+function isOurHook(h) {
+  const m = h && typeof h.command === 'string' && HOOK_CMD_RE.exec(h.command.trim());
+  if (!m) return false;
+  if (sameCmd(m[1], HOOK_SCRIPT)) return true;
+  try { return fs.readFileSync(m[1], 'utf8').includes('CC Remote'); } catch { return true; }
+}
 // Stop chạy nền (asyncRewake): xong lượt là phiên rảnh thật, VS Code không hiện đang chạy; có tin từ điện thoại
 // thì hook thoát mã 2 và Claude Code đánh thức Claude với nội dung stderr. Bản Claude Code cũ không biết asyncRewake
 // thì hook chạy kiểu chặn như trước (mã 2 + stderr cũng là "chặn, làm tiếp với lời nhắn này").
@@ -1761,16 +1802,28 @@ function readSettingsFile() {
   const file = path.join(claudeDir(), 'settings.json');
   let text = '';
   try { text = fs.readFileSync(file, 'utf8'); } catch { return { file, data: {} }; }
-  try { return { file, data: JSON.parse(text) || {}, text }; } catch {
+  let data = null;
+  try { data = text.trim() ? JSON.parse(text.replace(/^\uFEFF/, '')) : {}; } catch {}   // sửa bằng Notepad có thể thêm BOM
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new RemoteError('FORMAT', `Không đọc được ${file} (JSON lỗi) — sửa tay rồi thử lại`);
   }
+  return { file, data, text };
+}
+
+// Ghi file của Claude Code: atomic (Claude Code đọc settings.json liên tục, không được thấy file ghi dở);
+// file là symlink (dotfiles) thì ghi vào file thật để không phá link.
+function writeClaudeFile(file, text) {
+  let target = file;
+  try { target = fs.realpathSync(file); } catch {}
+  writeAtomicSync(target, text);
 }
 
 // bỏ hook của mình khỏi settings.hooks (giữ nguyên hook khác)
 function stripOurHooks(hooks) {
   for (const ev of Object.keys(hooks || {})) {
     if (!Array.isArray(hooks[ev])) continue;
-    hooks[ev] = hooks[ev].map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isOurHook(h)) })).filter((g) => g.hooks.length);
+    hooks[ev] = hooks[ev].map((g) => (g && Array.isArray(g.hooks) ? { ...g, hooks: g.hooks.filter((h) => !isOurHook(h)) } : g))
+      .filter((g) => !g || !Array.isArray(g.hooks) || g.hooks.length);
     if (!hooks[ev].length) delete hooks[ev];
   }
 }
@@ -1778,38 +1831,40 @@ function stripOurHooks(hooks) {
 function hooksStatus() {
   let data = {};
   try { data = readSettingsFile().data; } catch { return { installed: false, error: 'settings.json lỗi' }; }
-  const h = data.hooks || {};
-  const ours = (ev) => (h[ev] || []).flatMap((g) => (g.hooks || []).filter(isOurHook));
+  const h = data.hooks && typeof data.hooks === 'object' ? data.hooks : {};
+  const ours = (ev) => (Array.isArray(h[ev]) ? h[ev] : []).flatMap((g) => (g && Array.isArray(g.hooks) ? g.hooks : []).filter(isOurHook));
   const have = (ev) => ours(ev).length > 0;
   const installed = HOOKS.every(([ev]) => have(ev));
-  // cài từ bản cũ (Stop chạy kiểu chặn) -> cần cài lại
-  const outdated = installed && !ours('Stop').every((x) => x.asyncRewake === true);
-  return { installed, outdated, partial: HOOKS.some(([ev]) => have(ev)), command: fs.existsSync(path.join(claudeDir(), 'commands', 'phone.md')) };
+  const partial = HOOKS.some(([ev]) => have(ev));
+  // đúng bản đang chạy: mỗi sự kiện một hook, đúng lệnh (thư mục hiện tại) và đúng tuỳ chọn (vd. Stop chạy nền)
+  const current = HOOKS.every(([ev, arg, extra]) => {
+    const list = ours(ev);
+    return list.length === 1 && sameCmd(list[0].command, hookCmd(arg)) && Object.entries(extra).every(([k, v]) => list[0][k] === v);
+  });
+  // cài từ bản cũ, từ thư mục cũ (đã chuyển tool) hoặc thiếu sự kiện mới -> cần cài lại (tracker tự cài lại lúc khởi động)
+  return { installed, outdated: partial && !current, partial, command: fs.existsSync(path.join(claudeDir(), 'commands', 'phone.md')) };
 }
 
 function installHooks() {
   const { file, data, text } = readSettingsFile();
   if (text) fs.copyFileSync(file, `${file}.cc-remote-backup`);
-  data.hooks = data.hooks && typeof data.hooks === 'object' ? data.hooks : {};
+  data.hooks = data.hooks && typeof data.hooks === 'object' && !Array.isArray(data.hooks) ? data.hooks : {};
   stripOurHooks(data.hooks);
   for (const [ev, arg, extra] of HOOKS) {
     const matcher = ['PermissionRequest', 'PreToolUse', 'PostToolUse'].includes(ev) ? { matcher: '*' } : {};
     (data.hooks[ev] ||= []).push({ ...matcher, hooks: [{ type: 'command', command: hookCmd(arg), ...extra }] });
   }
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
-  const cmdDir = path.join(claudeDir(), 'commands');
-  fs.mkdirSync(cmdDir, { recursive: true });
-  fs.writeFileSync(path.join(cmdDir, 'phone.md'), phoneCmd());
+  writeClaudeFile(file, JSON.stringify(data, null, 2) + '\n');
+  writeClaudeFile(path.join(claudeDir(), 'commands', 'phone.md'), phoneCmd());
   return hooksStatus();
 }
 
 function uninstallHooks() {
   const { file, data, text } = readSettingsFile();
-  if (text && data.hooks) {
+  if (text && data.hooks && typeof data.hooks === 'object') {
     stripOurHooks(data.hooks);
     if (!Object.keys(data.hooks).length) delete data.hooks;
-    fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
+    writeClaudeFile(file, JSON.stringify(data, null, 2) + '\n');
   }
   const cmd = path.join(claudeDir(), 'commands', 'phone.md');
   try { if (fs.readFileSync(cmd, 'utf8').includes('[[cc-remote:phone]]')) fs.unlinkSync(cmd); } catch {}

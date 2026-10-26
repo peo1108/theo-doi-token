@@ -117,7 +117,7 @@ Token **không** đặt trên URL (khỏi lọt vào log của Caddy).
 | `event` `{to:conn, session, data}` | agent → hub → app | Phát lại sau `sub`, chỉ cho một kết nối. |
 | `event` `{scope:'user', data}` | agent → hub → app | Sự kiện chung (hạn mức, xin quyền mới, danh sách phiên đổi) → mọi app của người đó. |
 | `machine` `{id, name, online, lastSeen}` | hub → app | Máy vào / ra mạng, đổi tên. |
-| `presence` `{foreground}` | app → hub | App đang mở hay ở nền (để quyết định có đẩy thông báo). |
+| `presence` `{foreground, notifies}` | app → hub | App đang mở hay ở nền; `notifies`: đang chạy nền và tự bắn thông báo trên máy (để quyết định có đẩy thông báo). |
 | `notify` `{key, level, title, body, session?}` | agent → hub | Yêu cầu gửi thông báo (mục 6). |
 | `part` | hai chiều | Mảnh của tin lớn (mục 5). |
 
@@ -191,7 +191,9 @@ Tương ứng 1–1 với API `/v1/*` hiện có của `remote.js`, để lõi g
 - Agent gửi `notify {key, level, title, body, session?}` cho: Claude hỏi / xin quyền, xong lượt, bị dừng, hết hạn mức
   (các chỗ đang gọi `hub.notify` trong `remote.js`) và cảnh báo của tracker (hạn mức ≥ ngưỡng, đăng nhập sắp hết hạn
   — các `push` trong `checkAlerts`).
-- Hub đẩy khi người dùng **không có app nào đang `presence{foreground:true}`**.
+- Hub đẩy khi người dùng **không có app nào đang `presence{foreground:true}`**. Sự kiện của phiên (`notify` có `session`)
+  cũng không đẩy khi có app `presence{notifies:true}` (chạy nền, tự báo) — không thì một việc báo hai lần; cảnh báo của
+  tracker (không có `session`) vẫn đẩy.
 - Kênh: `https://ntfy.sh/<topic>`, topic 128 bit ngẫu nhiên do hub tạo cho mỗi người dùng (lưu trong DB). App có nút
   "Bật thông báo" mở `ntfy://ntfy.sh/<topic>` để đăng ký trong app ntfy. Header `Click: ccremote://session/<machine>/<id>`.
 - Chống spam: bỏ `notify` trùng `key` trong 24 giờ (khoá phải ổn định — không chứa mốc thời gian dao động); tối đa

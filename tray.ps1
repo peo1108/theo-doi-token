@@ -129,15 +129,26 @@ function Update-Status {
     $cfg = Invoke-RestMethod "$Base/api/config" -TimeoutSec 5
     $ai = $null
     try { $ai = Invoke-RestMethod "$Base/api/accounts" -TimeoutSec 10 } catch { }
+    $five = if ($s.account) { $s.account.fiveHour } else { $null }
+    $week = if ($s.account) { $s.account.sevenDay } else { $null }
+    $lim = if ($cfg.alertLimitPct -gt 0) { [double]$cfg.alertLimitPct } else { 90 }
     if ($s.window) {
       $end = [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$s.window.end).LocalDateTime.ToString('HH:mm')
-      $ratio = if ($s.avgWindowCost -gt 0) { $s.projected / $s.avgWindowCost } else { 0 }
-      $state = if ($s.avgWindowCost -le 0) { 'good' } elseif ($ratio -gt $cfg.alertWindowRatio) { 'bad' } elseif ($ratio -gt 1) { 'warn' } else { 'good' }
-      $line = "5h $(Fmt-Usd $s.window.cost) · reset $end"
+      if ($s.window.real -and $five -and $null -ne $five.pct) {
+        # có % hạn mức thật từ Anthropic: màu theo % như thẻ Cửa sổ 5 giờ của dashboard
+        $state = if ($five.pct -ge $lim) { 'bad' } elseif ($five.pct -ge 70) { 'warn' } else { 'good' }
+        $line = "5h $([math]::Round([double]$five.pct))% · reset $end"
+      } else {
+        $ratio = if ($s.avgWindowCost -gt 0) { $s.projected / $s.avgWindowCost } else { 0 }
+        $state = if ($s.avgWindowCost -le 0) { 'good' } elseif ($ratio -gt $cfg.alertWindowRatio) { 'bad' } elseif ($ratio -gt 1) { 'warn' } else { 'good' }
+        $line = "5h $(Fmt-Usd $s.window.cost) · reset $end"
+      }
     } else {
       $state = 'idle'
       $line = '5h: chưa mở cửa sổ'
     }
+    # hết hạn mức tuần thì cũng không dùng được, dù cửa sổ 5h còn trống
+    if ($week -and $null -ne $week.pct -and $week.pct -ge $lim) { $state = 'bad' }
     $today = "Hôm nay $(Fmt-Usd $s.today)"
     if ($cfg.budgetDay -gt 0) {
       $today += " / $(Fmt-Usd $cfg.budgetDay)"
