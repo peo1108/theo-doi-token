@@ -131,7 +131,8 @@ tool đang chạy, kết quả · **duyệt quyền** (Cho phép / Luôn cho ph�
 khác đi), trả lời câu hỏi của Claude (chọn sẵn hoặc tự gõ), duyệt kế hoạch hoặc góp ý để Claude sửa · ngắt ·
 **cài đặt phiên giống VS Code**: đổi model (danh sách lấy thẳng từ Claude Code), Effort (Low → Max),
 Thinking, Fast mode, tự đổi model khi tin nhắn bị flag, chế độ quyền, output style; áp dụng ngay giữa phiên · gõ `/` để
-chọn lệnh (`/compact`, `/context`, `/review`…) · xem % hạn mức 5h/7 ngày · **hết hạn mức → "Đổi sang X & tiếp tục"** (đổi
+chọn lệnh (`/compact`, `/context`, `/review`…) · xem % hạn mức 5h/7 ngày và cảnh báo của máy (ngân sách, hạn mức, cần
+/login lại) · đổi tên máy · **hết hạn mức → "Đổi sang X & tiếp tục"** (đổi
 tài khoản, khởi động lại phiên với `--resume` rồi gửi "tiếp tục") · phiên xếp theo **dự án**, mở phiên mới ngay trong dự án ·
 khung trả lời giống VS Code (markdown đủ bảng/danh sách, tool có IN/OUT, diff của Edit).
 

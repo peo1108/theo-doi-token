@@ -154,6 +154,17 @@ struct RemoteState: Codable {
     let projects: [Project]?
     let alwaysOn: Bool?
     let pcAway: Bool?
+    /// cảnh báo gần đây của máy (ngân sách, hạn mức, đăng nhập…) — tracker cũ không gửi
+    let alerts: [PCAlert]?
+}
+
+/// Một cảnh báo của tracker trên máy tính.
+struct PCAlert: Codable, Identifiable, Hashable {
+    let id: Double
+    let t: Double
+    let level: String
+    let title: String
+    let body: String?
 }
 
 struct Project: Codable, Identifiable, Hashable {

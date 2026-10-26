@@ -365,6 +365,13 @@ function loadAlerts() {
   return { sent: {}, recent: [], ...readJSON(ALERTS_FILE, {}) };
 }
 
+// Cảnh báo cho trang chủ của app điện thoại: 3 cái mới nhất trong 6 giờ qua (app tự ẩn cái đã vuốt bỏ).
+// Không đẩy thông báo — ntfy / thông báo Windows đã lo khi app không mở.
+const phoneAlerts = (now = Date.now()) => loadAlerts().recent
+  .filter((a) => a && a.t > now - 6 * HOUR)
+  .slice(0, 3)
+  .map((a) => ({ id: a.id, t: a.t, level: a.level, title: a.title, body: a.body || '' }));
+
 function notifyWindows(title, body) {
   if (process.platform !== 'win32') return;
   const script = `
@@ -840,13 +847,14 @@ function serve() {
       remoteHub = remote.start({
         accounts: () => { const { rows, now } = analyze(); return accountsInfo(rows, now); },
         switchAccount: (id) => accounts.switchTo(id),
+        alerts: () => phoneAlerts(),
       }).hub;
       startHubLink();   // đã ghép với hub trên VPS -> kết nối ra hub
     }
   });
 }
 
-module.exports = { scan, analyze, records, accountsInfo, checkAlerts, createServer, refreshUsage };
+module.exports = { scan, analyze, records, accountsInfo, checkAlerts, createServer, refreshUsage, phoneAlerts };
 
 if (require.main === module) {
   const cmd = process.argv[2] || 'report';

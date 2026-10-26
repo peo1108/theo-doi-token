@@ -440,6 +440,16 @@ test('cài hook: dọn hook hỏng khi đã chuyển thư mục tool, giữ hook
   assert.deepEqual(ours(JSON.parse(fs.readFileSync(settings, 'utf8'))), [otherCmd]);
 });
 
+test('state: kèm cảnh báo gần đây của máy cho trang chủ app; đọc lỗi thì rỗng, không làm hỏng state', () => {
+  const al = [{ id: 1.5, t: Date.now(), level: 'warning', title: 'Chính đã dùng 92% cửa sổ 5h', body: 'Gợi ý: Phụ' }];
+  const h1 = R.createHub({ alerts: () => al });
+  assert.deepEqual(h1.state().alerts, al);
+  const h2 = R.createHub({ alerts: () => { throw new Error('alerts.json hỏng'); } });
+  assert.deepEqual(h2.state().alerts, []);
+  assert.deepEqual(R.createHub({}).state().alerts, []);
+  for (const h of [h1, h2]) h.shutdown();
+});
+
 test('tiêu đề phiên: tên đặt bằng /rename thắng ai-title ghi sau nó (cả lúc nạp lẫn lúc đang theo dõi)', async () => {
   const id = 'abababab-1111-2222-3333-444444444444';
   const dir = path.join(PROJECTS, 'title');

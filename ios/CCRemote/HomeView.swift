@@ -17,6 +17,16 @@ struct HomeView: View {
                 }
             }
 
+            // cảnh báo của máy (ngân sách, hạn mức 90%, cần /login lại…): vuốt sang trái để ẩn
+            if !app.visibleAlerts.isEmpty {
+                Section("Cảnh báo trên máy") {
+                    ForEach(app.visibleAlerts) { a in
+                        PCAlertRow(alert: a)
+                            .swipeActions { Button("Ẩn") { app.dismissAlert(a.id) }.tint(.gray) }
+                    }
+                }
+            }
+
             if let info = app.state?.accounts, !info.list.isEmpty {
                 Section {
                     ForEach(info.list) { a in
@@ -110,6 +120,33 @@ struct HomeView: View {
         } message: { _ in
             Text("Claude Code trên máy sẽ dùng tài khoản này. Phiên mở từ điện thoại tự khởi động lại khi rảnh; phiên mở trong terminal cần mở lại.")
         }
+    }
+}
+
+/// Một cảnh báo của tracker trên máy tính.
+struct PCAlertRow: View {
+    let alert: PCAlert
+
+    private var icon: (String, Color) {
+        switch alert.level {
+        case "critical": return ("exclamationmark.octagon.fill", .red)
+        case "warning": return ("exclamationmark.triangle.fill", .orange)
+        default: return ("info.circle.fill", .accentColor)
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon.0).foregroundStyle(icon.1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(alert.title).font(.subheadline.weight(.semibold))
+                if let b = alert.body, !b.isEmpty {
+                    Text(b).font(.caption).foregroundStyle(.secondary)
+                }
+                Text(relativeTime(alert.t)).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 

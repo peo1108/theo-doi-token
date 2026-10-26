@@ -386,6 +386,19 @@ test('API: POST /api/config và /api/test-notify chặn CSRF, JSON sai trả 400
   });
 });
 
+test('phoneAlerts: app thấy 3 cảnh báo mới nhất trong 6 giờ qua, không lộ trường nội bộ', () => {
+  reset();
+  const now = Date.now();
+  const recent = [0, 1, 2, 3].map((i) => ({ id: now - i * 60e3 + 0.5, t: now - i * 60e3, level: 'warning', title: `c${i}`, body: 'b', extra: 'x' }));
+  recent.push({ id: now - 7 * HOUR, t: now - 7 * HOUR, level: 'critical', title: 'cũ', body: '' });
+  fs.writeFileSync(path.join(env.dataDir, 'alerts.json'), JSON.stringify({ sent: {}, recent }));
+  const a = T.phoneAlerts(now);
+  assert.deepEqual(a.map((x) => x.title), ['c0', 'c1', 'c2']);
+  assert.deepEqual(Object.keys(a[0]).sort(), ['body', 'id', 'level', 't', 'title']);
+  fs.rmSync(path.join(env.dataDir, 'alerts.json'));
+  assert.deepEqual(T.phoneAlerts(now), [], 'chưa có file -> rỗng');
+});
+
 test('API: không ghi được config.json -> báo lỗi WRITE_FAILED, không trả cài đặt mới như đã lưu', async () => {
   reset();
   seed();

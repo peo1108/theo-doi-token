@@ -22,6 +22,29 @@ final class AppModel {
     /// thứ tự các lần gọi /v1/state: chỉ nhận kết quả mới hơn lần đã hiện
     @ObservationIgnored private var refreshSeq = 0
     @ObservationIgnored private var appliedSeq = 0
+    /// cảnh báo của máy đã vuốt ẩn ở trang chủ (nhớ qua các lần mở app)
+    var dismissedAlerts: Set<Double> = Set(UserDefaults.standard.array(forKey: "dismissedAlerts") as? [Double] ?? [])
+
+    /// Cảnh báo của máy còn hiện ở trang chủ.
+    var visibleAlerts: [PCAlert] { (state?.alerts ?? []).filter { !dismissedAlerts.contains($0.id) } }
+
+    func dismissAlert(_ id: Double) {
+        // chỉ nhớ những cái máy còn gửi (khỏi phình mãi)
+        let live = Set((state?.alerts ?? []).map(\.id))
+        dismissedAlerts = dismissedAlerts.union([id]).intersection(live.union([id]))
+        UserDefaults.standard.set(Array(dismissedAlerts), forKey: "dismissedAlerts")
+    }
+
+    /// Đổi tên máy đang chọn (hub báo lại cho mọi app đang mở).
+    func renameMachine(_ name: String) async {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty, !machineId.isEmpty else { return }
+        do {
+            let _: Ignored = try await hubCall("machines.rename", ["id": machineId, "name": n])
+        } catch {
+            lastError = (error as? APIError)?.message ?? error.localizedDescription
+        }
+    }
 
     var isPaired: Bool { hubToken != nil }
     var machines: [HubMachine] { hub?.machines ?? [] }

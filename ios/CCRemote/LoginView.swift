@@ -83,6 +83,8 @@ struct LoginView: View {
 /// Chọn máy tính khi tài khoản có nhiều máy (hiện trên thanh công cụ màn hình chính).
 struct MachinePicker: View {
     @Environment(AppModel.self) private var app
+    @State private var renaming = false
+    @State private var newName = ""
 
     var body: some View {
         Menu {
@@ -96,12 +98,28 @@ struct MachinePicker: View {
             if app.machines.isEmpty {
                 Text("Chưa có máy nào — ghép máy trên dashboard của máy tính")
             }
+            if let m = app.currentMachine {
+                Divider()
+                Button {
+                    newName = m.name
+                    renaming = true
+                } label: {
+                    Label("Đổi tên máy này…", systemImage: "pencil")
+                }
+            }
         } label: {
             HStack(spacing: 4) {
                 Circle().fill(app.currentMachine?.online == true ? Color.green : Color.secondary).frame(width: 7, height: 7)
                 Text(app.currentMachine?.name ?? "Chọn máy").font(.subheadline).lineLimit(1)
                 Image(systemName: "chevron.down").font(.caption2)
             }
+        }
+        .alert("Đổi tên máy", isPresented: $renaming) {
+            TextField("Tên máy", text: $newName)
+            Button("Lưu") { Task { await app.renameMachine(newName) } }
+            Button("Huỷ", role: .cancel) {}
+        } message: {
+            Text("Tên hiện trên app và trang web của hub.")
         }
     }
 }

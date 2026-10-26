@@ -1326,6 +1326,10 @@ function createHub(ctx = {}) {
     accountsCache = { t: now, v };
     return v;
   };
+  // cảnh báo gần đây của máy (ngân sách, hạn mức, đăng nhập…) cho trang chủ của app; lỗi đọc thì coi như không có
+  const alertsInfo = () => {
+    try { const a = ctx.alerts ? ctx.alerts() : []; return Array.isArray(a) ? a : []; } catch { return []; }
+  };
 
   let capsPending = null;
   const hub = {
@@ -1523,6 +1527,7 @@ function createHub(ctx = {}) {
           })),
         } : null,
         alwaysOn: alwaysOn(), pcAway: hub.pcAway(),
+        alerts: alertsInfo(),
       };
     },
     // Đổi tài khoản rồi khởi động lại các phiên đang chạy (phiên đang làm dở thì đợi xong lượt).

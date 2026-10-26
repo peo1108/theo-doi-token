@@ -32,6 +32,8 @@
 - App: đang kéo lên đọc tin cũ thì không bị giật xuống cuối mỗi khi Claude có bước mới; hiện nút "Tin mới ↓" (iOS 18+).
 - App: nén ảnh trước khi gửi ở luồng nền (gửi nhiều ảnh không còn khựng); ba nút duyệt quyền xếp hai hàng khi chật;
   nút biểu tượng có nhãn cho VoiceOver.
+- App: **cảnh báo của máy hiện ở trang chủ** (ngân sách, hạn mức 5h/tuần sắp hết, cần /login lại…; 3 cái mới nhất trong
+  6 giờ, vuốt để ẩn) — trước đây chỉ có ntfy / thông báo Windows. **Đổi tên máy** ngay trong menu chọn máy.
 
 ## v1.2.0 — 2026-10-06
 
