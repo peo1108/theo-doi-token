@@ -103,8 +103,11 @@ test('duyệt quyền: allow / always / deny và AskUserQuestion có answers', a
   await api('POST', `/v1/sessions/${id}/send`, { text: 'PERM 2' });
   evs = await watch(id, has('permission', (e) => e.requestId !== p.requestId));
   const p2 = evs.filter((e) => e.kind === 'permission').pop();
-  await api('POST', `/v1/sessions/${id}/permission`, { requestId: p2.requestId, decision: 'deny' });
-  await watch(id, has('assistant', (e) => e.text === 'denied'));
+  // từ chối kèm lời nhắn (như "No, and tell Claude what to do differently"): Claude đọc được, app thấy lại lời mình gõ
+  await api('POST', `/v1/sessions/${id}/permission`, { requestId: p2.requestId, decision: 'deny', feedback: '  ghi vào b.txt thay vì a.txt ' });
+  evs = await watch(id, has('assistant', (e) => e.text === 'denied'));
+  assert.match(evs.find((e) => e.kind === 'tool_result' && e.error).text, /từ chối từ điện thoại và nhắn: ghi vào b\.txt thay vì a\.txt$/);
+  assert.equal(evs.find((e) => e.kind === 'decided' && e.requestId === p2.requestId).text, 'ghi vào b.txt thay vì a.txt');
 
   await api('POST', `/v1/sessions/${id}/send`, { text: 'ASK' });
   evs = await watch(id, has('permission', (e) => e.tool === 'AskUserQuestion'));

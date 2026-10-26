@@ -247,7 +247,11 @@ struct SessionView: View {
                     }
                 }
             } label: {
-                Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
+                if model.sending {
+                    ProgressView().frame(width: 32, height: 32)   // đang gửi (ảnh lớn có thể mất vài giây)
+                } else {
+                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
+                }
             }
             .disabled((draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && picks.isEmpty) || model.sending)
         }
@@ -300,9 +304,10 @@ struct EventRow: View {
         case "permission":
             TimelineRow(color: .orange) {
                 VStack(alignment: .leading, spacing: 6) {
-                    PermissionCard(event: event, decision: event.requestId.flatMap { model.decisions[$0] }) { decision, answers in
+                    PermissionCard(event: event, decision: event.requestId.flatMap { model.decisions[$0] },
+                                   decisionText: event.requestId.flatMap { model.decisionTexts[$0] }) { decision, answers, feedback in
                         guard let api = app.api, let rid = event.requestId else { return }
-                        Task { await model.decide(rid, decision, answers: answers, api: api) }
+                        Task { await model.decide(rid, decision, answers: answers, feedback: feedback, api: api) }
                     }
                     // tool phải duyệt quyền không có dòng tool riêng (visible ẩn đi) -> ảnh kết quả hiện ở đây
                     if let imgs = event.toolUseId.flatMap({ model.toolResults[$0] })?.images, !imgs.isEmpty {
@@ -441,9 +446,16 @@ struct ToolRow: View {
 struct PermissionCard: View {
     let event: Event
     let decision: String?
-    let onDecide: (String, [String: String]?) -> Void
+    /// lời đã nhắn kèm khi từ chối
+    var decisionText: String? = nil
+    /// (quyết định, câu trả lời, lời nhắn kèm khi từ chối)
+    let onDecide: (String, [String: String]?, String?) -> Void
     @State private var showInput = false
     @State private var picks: [Int: Set<String>] = [:]
+    /// câu trả lời tự gõ ("Khác") của từng câu hỏi
+    @State private var others: [Int: String] = [:]
+    @State private var feedback = ""
+    @State private var showFeedback = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -477,6 +489,9 @@ struct PermissionCard: View {
                 Label(decidedText(decision), systemImage: decision == "pc" ? "desktopcomputer" : decision == "deny" || decision == "cancel" ? "xmark.circle" : "checkmark.circle")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                if let t = decisionText, !t.isEmpty {
+                    Text("“\(t)”").font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                }
             } else {
                 buttons
             }
@@ -505,7 +520,7 @@ struct PermissionCard: View {
         switch d {
         case "allow": return isQuestion ? "Đã trả lời" : isPlan ? "Đã duyệt kế hoạch" : "Đã cho phép"
         case "always": return "Đã cho phép (cả phiên)"
-        case "deny": return isQuestion ? "Đã bỏ qua" : "Đã từ chối"
+        case "deny": return isQuestion ? "Đã bỏ qua" : isPlan ? "Chưa duyệt" : "Đã từ chối"
         case "pc": return "Đã trả lời trên máy tính"
         default: return "Đã huỷ"
         }
@@ -522,6 +537,7 @@ struct PermissionCard: View {
                         if on { s.remove(o.label) } else { s.insert(o.label) }
                     } else {
                         s = [o.label]
+                        others[i] = nil   // chỉ chọn một: bấm lựa chọn có sẵn thì bỏ câu tự gõ
                     }
                     picks[i] = s
                 } label: {
@@ -543,39 +559,81 @@ struct PermissionCard: View {
                 .buttonStyle(.plain)
                 .disabled(decision != nil)
             }
+            // như "Other" của VS Code: không lựa chọn nào hợp thì tự gõ câu trả lời
+            if decision == nil {
+                TextField(q.multiSelect ? "Khác — thêm câu trả lời của bạn" : "Khác — tự gõ câu trả lời", text: Binding(
+                    get: { others[i] ?? "" },
+                    set: { v in
+                        others[i] = v
+                        if !q.multiSelect && !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { picks[i] = [] }
+                    }
+                ), axis: .vertical)
+                .lineLimit(1...4)
+                .font(.callout)
+                .padding(8)
+                .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 8))
+            }
         }
+    }
+
+    private func otherText(_ i: Int) -> String { (others[i] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var feedbackText: String { feedback.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    @ViewBuilder private var decisionButtons: some View {
+        Button(isPlan ? "Duyệt" : "Cho phép") { onDecide("allow", nil, nil) }
+            .buttonStyle(.borderedProminent)
+        if event.canAlways == true && !isPlan {
+            Button("Luôn cho phép") { onDecide("always", nil, nil) }
+                .buttonStyle(.bordered)
+        }
+        Button(isPlan ? "Chưa" : "Từ chối", role: .destructive) { onDecide("deny", nil, nil) }
+            .buttonStyle(.bordered)
     }
 
     @ViewBuilder private var buttons: some View {
         if isQuestion {
             let qs = event.questions ?? []
-            let ready = qs.indices.allSatisfy { !(picks[$0] ?? []).isEmpty }
+            let ready = qs.indices.allSatisfy { !(picks[$0] ?? []).isEmpty || !otherText($0).isEmpty }
             HStack {
                 Button("Gửi trả lời") {
                     var answers: [String: String] = [:]
                     for (i, q) in qs.enumerated() {
-                        let chosen = q.options.map(\.label).filter { (picks[i] ?? []).contains($0) }
+                        var chosen = q.options.map(\.label).filter { (picks[i] ?? []).contains($0) }
+                        if !otherText(i).isEmpty { chosen.append(otherText(i)) }
                         answers[q.question] = chosen.joined(separator: ", ")
                     }
-                    onDecide("allow", answers)
+                    onDecide("allow", answers, nil)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!ready)
-                Button("Bỏ qua", role: .destructive) { onDecide("deny", nil) }
+                Button("Bỏ qua", role: .destructive) { onDecide("deny", nil, nil) }
                     .buttonStyle(.bordered)
             }
         } else {
-            HStack(spacing: 8) {
-                Button(isPlan ? "Duyệt" : "Cho phép") { onDecide("allow", nil) }
-                    .buttonStyle(.borderedProminent)
-                if event.canAlways == true && !isPlan {
-                    Button("Luôn cho phép") { onDecide("always", nil) }
-                        .buttonStyle(.bordered)
+            VStack(alignment: .leading, spacing: 8) {
+                // ba nút một hàng; máy hẹp / chữ to thì xếp dọc thay vì gãy chữ "Luôn cho phép" làm hai dòng
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { decisionButtons }
+                    VStack(alignment: .leading, spacing: 8) { decisionButtons }
                 }
-                Button(isPlan ? "Chưa" : "Từ chối", role: .destructive) { onDecide("deny", nil) }
-                    .buttonStyle(.bordered)
+                .controlSize(.regular)
+                // như "No, and tell Claude what to do differently" của VS Code: từ chối kèm lời nhắn để Claude làm khác đi
+                if showFeedback {
+                    HStack(alignment: .bottom, spacing: 8) {
+                        TextField(isPlan ? "Cần sửa gì trong kế hoạch?" : "Bảo Claude làm khác đi thế nào…", text: $feedback, axis: .vertical)
+                            .lineLimit(1...5)
+                            .font(.callout)
+                            .padding(8)
+                            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 8))
+                        Button("Gửi") { onDecide("deny", nil, feedbackText) }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(feedbackText.isEmpty)
+                    }
+                } else {
+                    Button(isPlan ? "Chưa — góp ý để Claude sửa kế hoạch…" : "Từ chối và nhắn Claude…") { showFeedback = true }
+                        .font(.footnote)
+                }
             }
-            .controlSize(.regular)
         }
     }
 }

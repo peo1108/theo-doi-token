@@ -19,6 +19,13 @@
 - Hạn mức từ Anthropic: lỗi 429 / 401 thì chờ hết chu kỳ (hoặc `Retry-After`) mới hỏi lại token đó, thay vì 20 giây
   một lần.
 - Hub: đổi tên / ngắt máy trên trang web thì app đang mở thấy ngay.
+- App: trả lời câu hỏi của Claude bằng chữ tự gõ ("Khác") khi không lựa chọn nào hợp; **từ chối kèm lời nhắn** ("Từ
+  chối và nhắn Claude…") và **góp ý kế hoạch** ("Chưa — góp ý…") để Claude làm khác đi / sửa kế hoạch, như VS Code.
+- App đỡ pin và dữ liệu di động khi chạy nền: hỏi trạng thái máy 30 giây một lần thay vì 4 giây (vẫn làm mới ngay khi
+  phiên đổi trạng thái); máy tính chỉ báo "danh sách phiên đổi" khi thật sự đổi, không còn 2 giây một lần lúc Claude chạy.
+- App: chưa có máy tính thì trang chủ chỉ cách ghép (trước đây "Đang tải…" mãi); tiêu đề trang chủ là "CC Remote" thay
+  cho tên Windows bị cắt; nút duyệt quyền không còn gãy chữ; nút gửi có vòng quay khi đang gửi ảnh.
+- Dashboard: đặt tên máy ngay lúc ghép hub (tên hiện trên app), mặc định là tên máy Windows.
 
 ## v1.2.0 — 2026-10-06
 

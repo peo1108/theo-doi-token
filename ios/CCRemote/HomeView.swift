@@ -34,10 +34,26 @@ struct HomeView: View {
                 }
             }
 
+            // tài khoản hub chưa có máy tính nào (người mới, máy vừa bị ngắt): chỉ cách ghép thay vì "Đang tải…" mãi
+            if app.hub?.connected == true && app.machines.isEmpty {
+                Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Chưa có máy tính nào", systemImage: "desktopcomputer").font(.headline)
+                        Text("Trên máy tính: mở dashboard (127.0.0.1:7788) → thẻ Điện thoại → Kết nối hub, đăng nhập cùng tài khoản này. Máy sẽ hiện ra ở đây.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
             Section("Đang chạy") {
                 let live = app.state?.live ?? []
                 if live.isEmpty {
-                    Text(app.state == nil ? "Đang tải…" : "Không có phiên nào đang chạy")
+                    Text(app.state != nil ? "Không có phiên nào đang chạy"
+                         : app.machines.isEmpty && app.hub?.connected == true ? "Chưa ghép máy tính"
+                         : app.currentMachine?.online == false ? "Máy tính đang tắt hoặc chưa chạy tracker"
+                         : "Đang tải…")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(live) { s in
@@ -60,7 +76,8 @@ struct HomeView: View {
                 }
             }
         }
-        .navigationTitle(app.state?.host ?? "CC Remote")
+        // tên máy đã hiện ở nút chọn máy phía trên; tên Windows (DESKTOP-…) làm tiêu đề lớn thì vô nghĩa và bị cắt
+        .navigationTitle("CC Remote")
         .refreshable { await app.refresh() }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {

@@ -42,9 +42,20 @@ function startLink({ hubUrl, machineToken, hub, onStatus = () => {}, backoff = {
   }
   const dropSubs = () => { for (const k of [...subs.keys()]) unsubscribe(k); };
 
-  // danh sách phiên / trạng thái đổi -> báo mọi app, gộp 2 giây (app sẽ gọi lại state, mà state quét thư mục lịch sử)
+  // danh sách phiên / trạng thái đổi -> báo mọi app, gộp 2 giây (app sẽ gọi lại state, mà state quét thư mục lịch sử).
+  // Chỉ báo khi thứ app hiện / dựa vào để báo đổi (trạng thái, chờ duyệt, tiêu đề, hết hạn mức…), không báo mỗi lần phiên
+  // có thêm dòng lịch sử (VS Code đang chạy: 0,7 giây một lần) -> app chạy nền đỡ pin và dữ liệu di động.
   let stateTimer = null;
-  hub.onSessionState = () => {
+  const sigs = new Map();   // phiên -> dấu trạng thái lần báo trước
+  hub.onSessionState = (s) => {
+    if (s && typeof s.summary === 'function') {
+      const x = s.summary();
+      const sig = JSON.stringify([x.status, x.pending, x.title, x.live, x.external, x.attached, x.ready, x.pcAway, x.mirror,
+        x.rate && x.rate.status, x.ask && x.ask.tool]);
+      if (sigs.get(x.id) === sig) return;
+      if (sigs.size > 500) sigs.clear();
+      sigs.set(x.id, sig);
+    }
     if (stateTimer) return;
     stateTimer = setTimeout(() => { stateTimer = null; raw({ type: 'event', scope: 'user', data: { kind: 'sessions' } }); }, 2000);
     stateTimer.unref?.();

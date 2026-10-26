@@ -1185,12 +1185,15 @@ class Session {
     this.broadcastState();
   }
 
-  decide(requestId, { decision, answers, message } = {}) {
+  // feedback: lời người dùng gõ khi từ chối (như "No, and tell Claude what to do differently" của VS Code) -> Claude
+  // đọc được và làm khác đi / sửa kế hoạch.
+  decide(requestId, { decision, answers, message, feedback } = {}) {
     const p = this.pending.get(requestId);
     if (!p) throw new RemoteError('NOT_PENDING', 'Yêu cầu này đã được xử lý hoặc đã huỷ', 409);
     let response;
+    const fb = decision === 'deny' && typeof feedback === 'string' ? feedback.trim().slice(0, 2000) : '';
     if (decision === 'deny') {
-      response = { behavior: 'deny', message: String(message || 'Người dùng từ chối từ điện thoại').slice(0, 2000) };
+      response = { behavior: 'deny', message: fb ? `Người dùng từ chối từ điện thoại và nhắn: ${fb}` : String(message || 'Người dùng từ chối từ điện thoại').slice(0, 2000) };
     } else if (decision === 'allow' || decision === 'always') {
       const updatedInput = { ...p.input };
       if (answers && typeof answers === 'object') updatedInput.answers = answers;
@@ -1203,7 +1206,7 @@ class Session {
       try { p.hook.res.end(JSON.stringify({ decision: response })); } catch {}
       if (this.bridge) this.bridge.busy = true;
     } else this.write({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } });
-    this.store({ kind: 'decided', requestId, decision, ...(answers ? { answers } : {}) });
+    this.store({ kind: 'decided', requestId, decision, ...(answers ? { answers } : {}), ...(fb ? { text: fb } : {}) });
     this.refreshStatus();
   }
 

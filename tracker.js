@@ -653,7 +653,7 @@ function hubInfo() {
   const s = hubLink ? hubLink.status() : { state: 'off', since: null, error: null };
   return d && d.machineToken
     ? { paired: true, hubUrl: d.hubUrl, name: d.name, machineId: d.machineId, defaultUrl: DEFAULT_HUB, ...s }
-    : { paired: false, defaultUrl: DEFAULT_HUB, state: 'off' };
+    : { paired: false, defaultUrl: DEFAULT_HUB, defaultName: os.hostname(), state: 'off' };
 }
 
 function startHubLink() {

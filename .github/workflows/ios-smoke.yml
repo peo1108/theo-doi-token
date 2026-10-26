@@ -69,6 +69,8 @@ jobs:
           xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote hubURL "$(j hubURL)"
           xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote secure.hubToken "$(j hubToken)"
           xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote machineId "$(j machineId)"
+          # tắt thông báo trong app: không hiện hộp xin quyền (không ai bấm) che mọi ảnh chụp
+          xcrun simctl spawn "$UDID" defaults write vn.peo.ccremote notifyOn -bool NO
           xcrun simctl launch "$UDID" vn.peo.ccremote
           shot 02-home 6
 

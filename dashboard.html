@@ -2112,6 +2112,7 @@ function renderRemote() {
       <div class="rm-hub"><input id="hubUrl" class="url" value="${esc(hb.defaultUrl || '')}" spellcheck="false" autocomplete="off" placeholder="https://…">
         <input id="hubUser" placeholder="tên đăng nhập" spellcheck="false" autocomplete="username">
         <input id="hubPass" type="password" placeholder="mật khẩu" autocomplete="current-password">
+        <input id="hubName" value="${esc(hb.defaultName || '')}" placeholder="tên máy (hiện trên app)" title="Tên máy hiện trên app điện thoại" spellcheck="false" autocomplete="off">
         <button class="ghost sm primary" data-rm="hub-pair" ${dis}>Ghép máy</button></div>`;
 
   box.innerHTML = `<div class="rm-step"><h3>1 · Kết nối hub</h3>${stepHub}</div>
@@ -2127,7 +2128,7 @@ els('rmBody').addEventListener('click', async e => {
     if (act === 'always-toggle') { const r = await acctPost('/api/remote/always-on', { on: !RM.alwaysOn }); setRmMsg('ok', r.alwaysOn ? 'Đã bật luôn sẵn sàng' : 'Đã tắt luôn sẵn sàng'); }
     else if (act === 'hooks-on' || act === 'hooks-off') { const r = await acctPost('/api/remote/hooks', { on: act === 'hooks-on' }); setRmMsg('ok', r.installed ? 'Đã cài hook — mở lại phiên Claude Code là điện thoại điều khiển được' : 'Đã gỡ hook'); }
     else if (act === 'hub-pair') {
-      await acctPost('/api/hub/pair', { hubUrl: els('hubUrl').value, username: els('hubUser').value, password: els('hubPass').value });
+      await acctPost('/api/hub/pair', { hubUrl: els('hubUrl').value, username: els('hubUser').value, password: els('hubPass').value, name: els('hubName').value });
       els('hubPass').value = '';
       setRmMsg('ok', 'Đã ghép máy với hub — đăng nhập cùng tài khoản trên app');
     }

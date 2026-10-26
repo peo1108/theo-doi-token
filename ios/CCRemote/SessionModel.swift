@@ -11,6 +11,8 @@ final class SessionModel {
     var summary: SessionSummary?
     var toolResults: [String: Event] = [:]
     var decisions: [String: String] = [:]
+    /// lời người dùng nhắn kèm khi từ chối (requestId -> chữ)
+    var decisionTexts: [String: String] = [:]
     var connected = false
     var lastError: String?
     var sending = false
@@ -76,6 +78,7 @@ final class SessionModel {
             events = []
             toolResults = [:]
             decisions = [:]
+            decisionTexts = [:]
             lastSeq = 0
             epoch = head.epoch ?? ""
         case "state":
@@ -105,6 +108,7 @@ final class SessionModel {
             if let tid = e.toolId { toolResults[tid] = e }
         case "decided":
             if let rid = e.requestId, let d = e.decision { decisions[rid] = d }
+            if let rid = e.requestId, let t = e.text, !t.isEmpty { decisionTexts[rid] = t }
         case "permission", "limit":
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
         case "result":
@@ -134,9 +138,11 @@ final class SessionModel {
         return lastError == nil
     }
 
-    func decide(_ requestId: String, _ decision: String, answers: [String: String]? = nil, api: APIClient) async {
+    /// feedback: lời nhắn kèm khi từ chối / chưa duyệt kế hoạch (Claude đọc được để làm khác đi)
+    func decide(_ requestId: String, _ decision: String, answers: [String: String]? = nil, feedback: String? = nil, api: APIClient) async {
         var body: [String: Any] = ["requestId": requestId, "decision": decision]
         if let answers { body["answers"] = answers }
+        if let feedback, !feedback.isEmpty { body["feedback"] = feedback }
         await post(api, "permission", body)
     }
 

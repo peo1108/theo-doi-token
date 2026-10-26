@@ -136,7 +136,10 @@ final class AppModel {
     func poll() async {
         while !Task.isCancelled {
             await refresh()
-            try? await Task.sleep(for: .seconds(4))
+            // chạy nền: máy tính đã đẩy sự kiện "sessions" mỗi khi phiên đổi trạng thái (xin quyền, xong việc…) và app làm mới
+            // ngay lúc đó -> chỉ cần hỏi thưa để bù; mỗi lần ~10 KB, 4 giây một lần cả ngày thì tốn pin và dữ liệu di động
+            let active = UIApplication.shared.applicationState == .active
+            try? await Task.sleep(for: .seconds(active ? 4 : 30))
         }
     }
 
