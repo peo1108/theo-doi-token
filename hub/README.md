@@ -47,6 +47,10 @@ Dashboard trên PC (`http://127.0.0.1:7788`) → thẻ **Điện thoại** → k
 cd /opt/theo-doi-token && git pull && sudo bash hub/deploy/update.sh
 ```
 
+Thư mục trên VPS chép bằng scp (không có git): chép lại các file đã đổi trong `hub/` (lấy từ git cho đúng xuống dòng LF,
+vd. `git show HEAD:hub/router.js > router.js`, nên sao lưu bản cũ trên VPS trước) vào `/opt/theo-doi-token/hub/` rồi chạy
+`sudo bash hub/deploy/update.sh` (cài lại thư viện, khởi động lại, kiểm tra `/v1/health`).
+
 ## Vận hành
 
 - Log: `journalctl -u cc-hub -f` · Caddy: `journalctl -u caddy -f`
