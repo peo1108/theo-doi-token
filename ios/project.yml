@@ -43,6 +43,7 @@ targets:
           NSAllowsArbitraryLoads: true
         NSLocalNetworkUsageDescription: Kết nối tới máy tính đang chạy Claude Code.
         NSCameraUsageDescription: Chụp ảnh để gửi cho Claude.
+        NSPhotoLibraryAddUsageDescription: Lưu ảnh Claude xem trên máy tính vào Ảnh.
         ITSAppUsesNonExemptEncryption: false
         UIBackgroundModes:
           - audio

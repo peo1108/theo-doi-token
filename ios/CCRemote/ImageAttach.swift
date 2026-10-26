@@ -29,12 +29,21 @@ enum ImagePrep {
         return UIGraphicsImageRenderer(size: size, format: fmt).image { _ in img.draw(in: CGRect(origin: .zero, size: size)) }
     }
 
-    /// Ảnh -> {mime, data, name, thumb} gửi cho máy tính (JPEG; cạnh dài ≤ 2000 px trừ khi bật "Gửi ảnh gốc").
-    static func payload(_ img: UIImage, index: Int) -> [String: Any]? {
+    /// Ảnh đã nén để gửi cho máy tính (giá trị thuần chuỗi: nén ở luồng nền rồi đưa về luồng chính được).
+    struct Payload: Sendable {
+        let data: String
+        let name: String
+        let thumb: String
+        var dict: [String: Any] { ["mime": "image/jpeg", "data": data, "name": name, "thumb": thumb] }
+    }
+
+    /// Ảnh -> JPEG base64 + ảnh nhỏ (cạnh dài ≤ 2000 px trừ khi bật "Gửi ảnh gốc"). Nặng (vài trăm ms mỗi ảnh lớn):
+    /// gọi từ luồng nền.
+    static func payload(_ img: UIImage, index: Int) -> Payload? {
         let full = sendOriginal ? resized(img, maxSide: .greatestFiniteMagnitude) : resized(img, maxSide: maxSide)
         guard let data = full.jpegData(compressionQuality: sendOriginal ? 0.95 : 0.85),
               let thumb = resized(img, maxSide: thumbSide).jpegData(compressionQuality: 0.6) else { return nil }
-        return ["mime": "image/jpeg", "data": data.base64EncodedString(), "name": "anh-\(index + 1).jpg", "thumb": thumb.base64EncodedString()]
+        return Payload(data: data.base64EncodedString(), name: "anh-\(index + 1).jpg", thumb: thumb.base64EncodedString())
     }
 
     static func image(base64: String?) -> UIImage? {
@@ -224,6 +233,8 @@ struct EventImages: View {
     @Environment(AppModel.self) private var app
     @State private var shown: UIImage?
     @State private var loading = false
+    /// ảnh đang mở: đóng (hoặc mở ảnh khác) trước khi tải xong thì không bật lại
+    @State private var opening: String?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -245,19 +256,137 @@ struct EventImages: View {
                 if loading { ProgressView() }
             }
         }
-        .sheet(isPresented: Binding(get: { shown != nil }, set: { if !$0 { shown = nil } })) {
-            if let shown {
-                ScrollView([.horizontal, .vertical]) { Image(uiImage: shown).resizable().scaledToFit() }
-                    .presentationDragIndicator(.visible)
-            }
+        .sheet(isPresented: Binding(get: { shown != nil }, set: { if !$0 { shown = nil; opening = nil } })) {
+            if let shown { ImageViewer(image: shown, loading: loading) }
         }
     }
 
     private func open(_ im: EventImage) async {
         guard let api = app.api else { return }
+        opening = im.name
+        // mở ngay bằng ảnh nhỏ đang có; ảnh đầy đủ (ảnh chụp màn hình vài MB, tải vài giây) xong thì thay vào
+        shown = im.thumb.flatMap { RemoteImages.inlineThumb(sessionId, im.name, base64: $0) }
+            ?? RemoteImages.cachedThumb(sessionId, im.name, maxPixel: 600)
+            ?? RemoteImages.cachedThumb(sessionId, im.name, maxPixel: 216)
         loading = true
         defer { loading = false }
-        shown = await RemoteImages.full(api, sessionId, im.name) ?? ImagePrep.image(base64: im.thumb)
+        let full = await RemoteImages.full(api, sessionId, im.name) ?? ImagePrep.image(base64: im.thumb)
+        guard opening == im.name, let full else { return }
+        shown = full
+    }
+}
+
+/// Xem ảnh cỡ đầy đủ như app Ảnh: nền đen, mở ra vừa khung, chụm hai ngón để phóng to / thu nhỏ, chạm hai lần để phóng
+/// chỗ chạm / trả về vừa khung; vuốt xuống hoặc ✕ để đóng; nút chia sẻ để lưu vào Ảnh / gửi đi.
+struct ImageViewer: View {
+    let image: UIImage
+    /// đang hiện ảnh nhỏ, ảnh đầy đủ còn đang tải
+    var loading = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black.ignoresSafeArea()
+            ZoomableImage(image: image).ignoresSafeArea()
+            if loading {
+                ProgressView().tint(.white).controlSize(.large)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
+            }
+            HStack {
+                Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
+                    .accessibilityLabel("Đóng")
+                Spacer()
+                ShareLink(item: Image(uiImage: image), preview: SharePreview("Ảnh", image: Image(uiImage: image))) {
+                    Image(systemName: "square.and.arrow.up.circle.fill")
+                }
+                .accessibilityLabel("Lưu / chia sẻ")
+            }
+            .font(.system(size: 30))
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(.white, Color.white.opacity(0.22))
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+        }
+        .presentationDragIndicator(.visible)
+        .preferredColorScheme(.dark)
+    }
+}
+
+/// UIScrollView phóng to ảnh (SwiftUI chưa có sẵn kiểu phóng to + kéo mượt như app Ảnh).
+struct ZoomableImage: UIViewRepresentable {
+    let image: UIImage
+
+    func makeUIView(context: Context) -> ZoomScrollView { ZoomScrollView(image: image) }
+    func updateUIView(_ view: ZoomScrollView, context: Context) { view.setImage(image) }
+}
+
+final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
+    private let imageView = UIImageView()
+    private var fittedFor: CGSize = .zero   // khung đã tính mức vừa khung
+
+    init(image: UIImage) {
+        super.init(frame: .zero)
+        delegate = self
+        backgroundColor = .clear
+        showsHorizontalScrollIndicator = false
+        showsVerticalScrollIndicator = false
+        decelerationRate = .fast
+        contentInsetAdjustmentBehavior = .never
+        imageView.contentMode = .scaleAspectFit
+        addSubview(imageView)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(doubleTap(_:)))
+        tap.numberOfTapsRequired = 2
+        addGestureRecognizer(tap)
+        setImage(image)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) không dùng") }
+
+    func setImage(_ image: UIImage) {
+        guard imageView.image !== image else { return }
+        zoomScale = 1
+        imageView.image = image
+        imageView.frame = CGRect(origin: .zero, size: image.size)
+        contentSize = image.size
+        fittedFor = .zero
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // mở ra (hoặc xoay máy): vừa khung; ảnh nhỏ hơn màn hình thì giữ cỡ thật cho khỏi nhoè
+        if bounds.width > 0, bounds.height > 0, bounds.size != fittedFor, let size = imageView.image?.size, size.width > 0, size.height > 0 {
+            fittedFor = bounds.size
+            let fit = min(bounds.width / size.width, bounds.height / size.height)
+            minimumZoomScale = min(fit, 1)
+            maximumZoomScale = max(minimumZoomScale * 6, 2)
+            zoomScale = minimumZoomScale
+        }
+        centerImage()
+    }
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+    func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImage() }
+
+    // ảnh nhỏ hơn khung (lúc vừa khung / thu nhỏ) thì nằm giữa màn hình
+    private func centerImage() {
+        let x = max(0, (bounds.width - imageView.frame.width) / 2)
+        let y = max(0, (bounds.height - imageView.frame.height) / 2)
+        let inset = UIEdgeInsets(top: y, left: x, bottom: y, right: x)
+        if contentInset != inset { contentInset = inset }
+    }
+
+    @objc private func doubleTap(_ g: UITapGestureRecognizer) {
+        if zoomScale > minimumZoomScale * 1.01 {
+            setZoomScale(minimumZoomScale, animated: true)
+        } else {
+            let scale = min(maximumZoomScale, minimumZoomScale * 3)
+            let p = g.location(in: imageView)
+            let w = bounds.width / scale, h = bounds.height / scale
+            zoom(to: CGRect(x: p.x - w / 2, y: p.y - h / 2, width: w, height: h), animated: true)
+        }
     }
 }
 

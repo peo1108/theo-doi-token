@@ -12,6 +12,10 @@ struct SessionView: View {
     @State private var showPhotos = false
     @State private var showCamera = false
     @FocusState private var inputFocused: Bool
+    /// đang nhìn cuối cuộc trò chuyện (đã kéo lên đọc tin cũ thì false: tin mới không giật xuống)
+    @State private var atBottom = true
+    /// có tin mới phía dưới trong lúc đang đọc tin cũ
+    @State private var newBelow = false
 
     init(id: String) {
         _model = State(initialValue: SessionModel(id: id))
@@ -47,11 +51,34 @@ struct SessionView: View {
             }
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
+            .modifier(BottomTracker(atBottom: $atBottom))
+            .onChange(of: atBottom) { _, bottom in if bottom { newBelow = false } }
             .onChange(of: model.scrollTick) { _, _ in
-                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                // đang kéo lên đọc tin cũ thì không giật xuống cuối mỗi lần có sự kiện mới — hiện nút "Tin mới" thay vào
+                if atBottom {
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                } else {
+                    newBelow = true
+                }
             }
             .onChange(of: inputFocused) { _, f in
                 if f { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+            }
+            .overlay(alignment: .bottom) {
+                if newBelow && !atBottom {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    } label: {
+                        Label("Tin mới", systemImage: "arrow.down")
+                            .font(.footnote.weight(.semibold))
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .background(.regularMaterial, in: Capsule())
+                            .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 10)
+                    .transition(.opacity)
+                }
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) { banner }
@@ -73,7 +100,8 @@ struct SessionView: View {
                 Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }
             }
         }
-        .task {
+        // theo máy đang chọn: mở từ thông báo lúc app chưa kịp chọn máy thì chọn xong mới nối, không đứng "Đang kết nối…" mãi
+        .task(id: app.machineId) {
             guard let api = app.api else { return }
             await model.run(api: api)
         }
@@ -219,7 +247,9 @@ struct SessionView: View {
                 Image(systemName: "slash.circle").font(.system(size: 28))
             }
             .tint(.secondary)
+            .accessibilityLabel("Lệnh /")
             attachButton
+                .accessibilityLabel("Đính kèm ảnh")
             TextField("Nhắn cho Claude…  (/ để xem lệnh)", text: $draft, axis: .vertical)
                 .lineLimit(1...6)
                 .focused($inputFocused)
@@ -232,6 +262,7 @@ struct SessionView: View {
                     Image(systemName: "stop.circle.fill").font(.system(size: 32))
                 }
                 .tint(.red)
+                .accessibilityLabel("Dừng Claude")
             }
             Button {
                 let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -239,9 +270,15 @@ struct SessionView: View {
                 let sending = picks
                 draft = ""
                 picks = []
+                atBottom = true   // gửi xong thì xuống cuối xem tin của mình, kể cả đang đọc tin cũ
                 act { api in
-                    let images = sending.enumerated().compactMap { ImagePrep.payload($0.element.image, index: $0.offset) }
-                    if !(await model.send(text, images: images, api: api)) {
+                    model.sending = true   // vòng quay hiện ngay cả lúc đang nén ảnh
+                    // nén ảnh ở luồng nền: ảnh chụp 12 MP nén trên luồng giao diện làm app khựng cả giây
+                    let raw = sending.map(\.image)
+                    let encoded = await Task.detached(priority: .userInitiated) {
+                        raw.enumerated().compactMap { ImagePrep.payload($0.element, index: $0.offset) }
+                    }.value
+                    if !(await model.send(text, images: encoded.map(\.dict), api: api)) {
                         if draft.isEmpty { draft = text }
                         if picks.isEmpty { picks = sending }
                     }
@@ -254,6 +291,7 @@ struct SessionView: View {
                 }
             }
             .disabled((draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && picks.isEmpty) || model.sending)
+            .accessibilityLabel("Gửi")
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(.bar)
@@ -262,6 +300,30 @@ struct SessionView: View {
     private func act(_ fn: @escaping @MainActor (APIClient) async -> Void) {
         guard let api = app.api else { return }
         Task { @MainActor in await fn(api) }
+    }
+}
+
+/// Người dùng đang ở cuối cuộc trò chuyện hay đã kéo lên đọc tin cũ. Chỉ đổi theo thao tác cuộn của người dùng
+/// (pha cuộn, iOS 18+), không theo nội dung dài ra; iOS 17 không có pha cuộn -> coi như luôn ở cuối (tự cuộn như cũ).
+private struct BottomTracker: ViewModifier {
+    @Binding var atBottom: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollPhaseChange { _, phase, ctx in
+                switch phase {
+                case .tracking, .interacting:
+                    atBottom = false   // tay đang trên màn hình: tin mới không được giật đi
+                case .idle:
+                    let g = ctx.geometry
+                    atBottom = g.visibleRect.maxY >= g.contentSize.height - 80
+                default:
+                    break
+                }
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -579,13 +641,19 @@ struct PermissionCard: View {
     private func otherText(_ i: Int) -> String { (others[i] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
     private var feedbackText: String { feedback.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    @ViewBuilder private var decisionButtons: some View {
+    private var canAlways: Bool { event.canAlways == true && !isPlan }
+
+    private var allowButton: some View {
         Button(isPlan ? "Duyệt" : "Cho phép") { onDecide("allow", nil, nil) }
             .buttonStyle(.borderedProminent)
-        if event.canAlways == true && !isPlan {
-            Button("Luôn cho phép") { onDecide("always", nil, nil) }
-                .buttonStyle(.bordered)
-        }
+    }
+
+    private var alwaysButton: some View {
+        Button("Luôn cho phép") { onDecide("always", nil, nil) }
+            .buttonStyle(.bordered)
+    }
+
+    private var denyButton: some View {
         Button(isPlan ? "Chưa" : "Từ chối", role: .destructive) { onDecide("deny", nil, nil) }
             .buttonStyle(.bordered)
     }
@@ -611,10 +679,17 @@ struct PermissionCard: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                // ba nút một hàng; máy hẹp / chữ to thì xếp dọc thay vì gãy chữ "Luôn cho phép" làm hai dòng
+                // ba nút một hàng; không đủ chỗ (máy hẹp / chữ to) thì "Luôn cho phép" xuống hàng dưới, không gãy chữ
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { decisionButtons }
-                    VStack(alignment: .leading, spacing: 8) { decisionButtons }
+                    HStack(spacing: 8) {
+                        allowButton
+                        if canAlways { alwaysButton }
+                        denyButton
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) { allowButton; denyButton }
+                        if canAlways { alwaysButton }
+                    }
                 }
                 .controlSize(.regular)
                 // như "No, and tell Claude what to do differently" của VS Code: từ chối kèm lời nhắn để Claude làm khác đi

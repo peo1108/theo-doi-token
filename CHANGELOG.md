@@ -26,6 +26,12 @@
 - App: chưa có máy tính thì trang chủ chỉ cách ghép (trước đây "Đang tải…" mãi); tiêu đề trang chủ là "CC Remote" thay
   cho tên Windows bị cắt; nút duyệt quyền không còn gãy chữ; nút gửi có vòng quay khi đang gửi ảnh.
 - Dashboard: đặt tên máy ngay lúc ghép hub (tên hiện trên app), mặc định là tên máy Windows.
+- App: **xem ảnh phóng to được** — mở ra vừa khung, chụm hai ngón để phóng to / thu nhỏ, chạm hai lần để phóng chỗ chạm,
+  nút ✕ và nút lưu / chia sẻ; mở ngay bằng ảnh nhỏ rồi thay ảnh đầy đủ khi tải xong (trước đây ảnh hiện cỡ gốc, bị cắt,
+  không zoom được).
+- App: đang kéo lên đọc tin cũ thì không bị giật xuống cuối mỗi khi Claude có bước mới; hiện nút "Tin mới ↓" (iOS 18+).
+- App: nén ảnh trước khi gửi ở luồng nền (gửi nhiều ảnh không còn khựng); ba nút duyệt quyền xếp hai hàng khi chật;
+  nút biểu tượng có nhãn cho VoiceOver.
 
 ## v1.2.0 — 2026-10-06
 

@@ -15,8 +15,9 @@ Chỉ cần Node.js, không cài thêm gói nào.
 Gỡ: chạy `autostart.ps1 -Uninstall`, chuột phải icon khay → Thoát, rồi xoá thư mục. Nếu đã dùng tính năng nhiều tài khoản,
 xoá thêm `%USERPROFILE%\.claude\account-profiles\` (chứa token đăng nhập đã lưu).
 
-**Riêng tư:** mọi số liệu nằm trên máy bạn (`data/`). Dashboard chỉ nghe ở 127.0.0.1; điện thoại đi qua hub trên VPS (PC chủ động kết nối ra, không mở cổng). Kết nối ra ngoài duy nhất là hỏi
-hạn mức 5h/tuần ở `api.anthropic.com` bằng chính token Claude Code của bạn (giống lệnh `/usage`).
+**Riêng tư:** mọi số liệu nằm trên máy bạn (`data/`). Dashboard chỉ nghe ở 127.0.0.1; điện thoại đi qua hub trên VPS (PC chủ động kết nối ra, không mở cổng). Ngoài hub (khi đã ghép), kết nối ra ngoài duy nhất của tracker là hỏi
+hạn mức 5h/tuần ở `api.anthropic.com` bằng chính token Claude Code của bạn (giống lệnh `/usage`). Trang dashboard tải font
+Inter từ Google Fonts (không có mạng thì dùng font của máy).
 
 ## Chạy
 
