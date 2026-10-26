@@ -50,6 +50,10 @@ const hub = R.createHub({
     { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'b1', content: 'param([switch]$Uninstall)\n$lnk = Join-Path $startup "Theo doi token.lnk"' }] } },
     { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'e1', name: 'Edit', input: { file_path: 'C:\\Users\\cam\\Desktop\\theo doi token\\remote.js', old_string: 'function createRemoteServer(hub) {', new_string: 'function createRemoteServer(hub) {\n  try { hookKey(); } catch {}' } }] } },
     { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'e1', content: 'ok' }] } },
+    // Claude xem ảnh trên máy (Read file .png) -> app hiện ảnh dưới dòng tool
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: 'C:\\Users\\cam\\Desktop\\icon.png' } }] } },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'r1', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png',
+      data: fs.readFileSync(path.join(__dirname, '..', 'CCRemote', 'Assets.xcassets', 'AppIcon.appiconset', 'icon.png')).toString('base64') } }] }] } },
     { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Không phải đăng nhập lại mỗi lần reboot. Đăng nhập Tailscale được lưu **lâu dài**; giới hạn duy nhất là khoá máy hết hạn sau khoảng 6 tháng.\n\n## Sau khi reboot\n\n| Thứ | Reboot thì sao |\n|---|---|\n| **Tailscale trên PC** | Chạy dạng service, tự bật cùng Windows |\n| `tailscale serve` | Cấu hình được lưu, tự chạy lại |\n| **App CC Remote** | Ghép một lần, token không hết hạn |\n\n1. Bật máy\n2. Mở app\n   - không cần làm gì thêm\n\n> Mẹo: tắt *key expiry* trong admin console.' }] } },
   ];
   fs.writeFileSync(ideFile, lines.map((l) => JSON.stringify({ ...l, cwd: work, sessionId: ide, timestamp: ts() })).join('\n') + '\n');

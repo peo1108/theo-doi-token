@@ -174,6 +174,14 @@ function resultText(c) {
   return '';
 }
 
+// Ảnh base64 trong nội dung (ảnh Claude xem bằng Read / tool chụp màn hình, ảnh dán trong VS Code).
+// Session.store lưu ra file rồi chỉ để lại tên -> sự kiện gửi cho app vẫn nhẹ.
+function imageBlocks(c) {
+  return (Array.isArray(c) ? c : [])
+    .filter((x) => x && x.type === 'image' && x.source && x.source.type === 'base64' && typeof x.source.data === 'string')
+    .map((x) => ({ mime: x.source.media_type, data: x.source.data }));
+}
+
 // Bỏ phần hệ thống chèn vào lời người dùng (system-reminder, ide_selection...), đổi /lệnh về dạng ngắn.
 function cleanUserText(t) {
   t = String(t || '');
@@ -238,9 +246,16 @@ function normalize(m) {
     if (typeof content === 'string') userText(content);
     else if (Array.isArray(content)) {
       for (const c of content) {
-        if (c.type === 'tool_result') out.push({ kind: 'tool_result', id: c.tool_use_id, error: !!c.is_error, text: clip(resultText(c.content), 3000) });
-        else if (c.type === 'text') userText(c.text);
-        else if (c.type === 'image') out.push({ kind: 'user', text: '[ảnh]' });
+        if (c.type === 'tool_result') {
+          const images = imageBlocks(c.content);
+          out.push({ kind: 'tool_result', id: c.tool_use_id, error: !!c.is_error, text: clip(resultText(c.content), 3000), ...(images.length ? { images } : {}) });
+        } else if (c.type === 'text') userText(c.text);
+      }
+      const images = imageBlocks(content);
+      if (images.length) {
+        const u = out.find((e) => e.kind === 'user' && !e.via);
+        if (u) u.images = images;
+        else out.push({ kind: 'user', text: '', images });
       }
     }
   }
@@ -466,10 +481,29 @@ function saveUploads(sid, imgs) {
   });
 }
 
+// Ảnh Claude xem trên máy -> data/uploads/<phiên>/c-<sha1>.<ext>. Đặt tên theo nội dung nên nạp lại lịch sử
+// không sinh file trùng; ảnh đã bị dọn sau 7 ngày thì được ghi lại từ file lịch sử. Bỏ ảnh sai chữ ký.
+function saveSeenImages(sid, images) {
+  const out = [];
+  for (const x of images) {
+    if (x.name) { out.push(x); continue; }   // ảnh gửi từ điện thoại: đã lưu, có sẵn ảnh nhỏ
+    const t = IMAGE_TYPES[x.mime];
+    const buf = t && Buffer.from(x.data, 'base64');
+    if (!buf || buf.length < 12 || !t.ok(buf)) continue;
+    const name = `c-${crypto.createHash('sha1').update(buf).digest('hex').slice(0, 16)}.${t.ext}`;
+    const file = path.join(uploadsDir(sid), name);
+    try {
+      if (!fs.existsSync(file)) { fs.mkdirSync(uploadsDir(sid), { recursive: true }); fs.writeFileSync(file, buf); }
+      out.push({ name });
+    } catch {}
+  }
+  return out;
+}
+
 function readUpload(sid, name) {
   const n = String(name || '');
   const t = Object.entries(IMAGE_TYPES).find(([, v]) => n.endsWith(`.${v.ext}`));
-  if (!/^\d+-\d+\.[a-z]+$/.test(n) || !t) throw new RemoteError('NOT_FOUND', 'Không có ảnh này', 404);
+  if (!/^(\d+-\d+|c-[0-9a-f]{16})\.[a-z]+$/.test(n) || !t) throw new RemoteError('NOT_FOUND', 'Không có ảnh này', 404);
   try { return { mime: t[0], data: fs.readFileSync(path.join(uploadsDir(sid), n)).toString('base64') }; }
   catch { throw new RemoteError('NOT_FOUND', 'Không có ảnh này', 404); }
 }
@@ -599,6 +633,10 @@ class Session {
   store(e, live = true) {
     const ev = { seq: ++this.seq, t: e.t || Date.now(), ...e };
     delete ev.live;
+    if (ev.images) {
+      ev.images = saveSeenImages(this.id, ev.images);
+      if (!ev.images.length) delete ev.images;
+    }
     this.events.push(ev);
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
     if (ev.kind === 'user' && !this.title) this.title = clip(plain(ev.text), 100);

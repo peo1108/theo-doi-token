@@ -217,7 +217,8 @@ struct Event: Decodable, Identifiable, Hashable {
     let via: String?
     let seconds: Double?
     let tokens: Int?
-    /// ảnh gửi từ điện thoại (ảnh nhỏ base64; ảnh đầy đủ lấy bằng sessions.image)
+    /// ảnh gửi từ điện thoại (ảnh nhỏ base64) hoặc ảnh Claude xem trên máy (không có ảnh nhỏ);
+    /// ảnh đầy đủ lấy bằng sessions.image
     let images: [EventImage]?
 
     var id: Int { seq }

@@ -1,5 +1,10 @@
 # Thay đổi
 
+## Chưa phát hành
+
+- App: **xem được ảnh Claude xem trên máy** — ảnh Claude mở bằng Read, ảnh chụp màn hình của tool, ảnh dán vào khung
+  chat VS Code. Ảnh hiện ngay dưới dòng tool / lời nhắn, bấm để xem cỡ đầy đủ (trước đây chỉ thấy chữ `[ảnh]`).
+
 ## v1.2.0 — 2026-10-06
 
 - **Hub trên VPS** thay cho Tailscale: điện thoại chỉ cần internet, không cần VPN. PC tự kết nối ra hub (không mở cổng),

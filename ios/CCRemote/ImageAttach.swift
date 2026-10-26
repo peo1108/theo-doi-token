@@ -100,7 +100,26 @@ struct AttachmentStrip: View {
     }
 }
 
-/// Ảnh nhỏ trong lời nhắn; bấm để xem ảnh đầy đủ (lấy từ máy tính).
+/// Ảnh đầy đủ lấy từ máy tính (sessions.image), nhớ trong bộ nhớ để cuộn qua lại không tải lại.
+enum FullImages {
+    private static let cache = NSCache<NSString, UIImage>()
+
+    static func cached(_ sessionId: String, _ name: String) -> UIImage? {
+        cache.object(forKey: "\(sessionId)/\(name)" as NSString)
+    }
+
+    static func load(_ api: APIClient, _ sessionId: String, _ name: String) async -> UIImage? {
+        if let img = cached(sessionId, name) { return img }
+        guard let r: ImageData = try? await api.call("POST", "/v1/sessions/\(sessionId)/image", body: ["name": name]),
+              let img = ImagePrep.image(base64: r.data) else { return nil }
+        cache.setObject(img, forKey: "\(sessionId)/\(name)" as NSString)
+        return img
+    }
+}
+
+/// Ảnh trong lời nhắn hoặc kết quả tool; bấm để xem ảnh đầy đủ.
+/// Ảnh gửi từ điện thoại có sẵn ảnh nhỏ; ảnh Claude xem trên máy (Read, chụp màn hình…) thì không
+/// -> tự tải ảnh đầy đủ khi hiện ra và hiện to hơn.
 struct EventImages: View {
     let images: [EventImage]
     let sessionId: String
@@ -115,16 +134,11 @@ struct EventImages: View {
                     Button {
                         Task { await open(im) }
                     } label: {
-                        Group {
-                            if let t = ImagePrep.image(base64: im.thumb) {
-                                Image(uiImage: t).resizable().scaledToFill()
-                            } else {
-                                Image(systemName: "photo").foregroundStyle(.secondary)
-                            }
+                        if im.thumb != nil {
+                            tile(ImagePrep.image(base64: im.thumb))
+                        } else {
+                            PCImageTile(name: im.name, sessionId: sessionId)
                         }
-                        .frame(width: 72, height: 72)
-                        .background(Color(.tertiarySystemBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
                 }
@@ -139,15 +153,56 @@ struct EventImages: View {
         }
     }
 
+    private func tile(_ img: UIImage?) -> some View {
+        Group {
+            if let img {
+                Image(uiImage: img).resizable().scaledToFill()
+            } else {
+                Image(systemName: "photo").foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 72, height: 72)
+        .background(Color(.tertiarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
     private func open(_ im: EventImage) async {
         guard let api = app.api else { return }
-        loading = true
+        loading = FullImages.cached(sessionId, im.name) == nil
         defer { loading = false }
-        if let r: ImageData = try? await api.call("POST", "/v1/sessions/\(sessionId)/image", body: ["name": im.name]),
-           let img = ImagePrep.image(base64: r.data) {
-            shown = img
-        } else {
-            shown = ImagePrep.image(base64: im.thumb)
+        shown = await FullImages.load(api, sessionId, im.name) ?? ImagePrep.image(base64: im.thumb)
+    }
+}
+
+/// Ảnh Claude xem trên máy: tải ảnh đầy đủ khi hiện ra, cao 140, giữ tỉ lệ (rộng tối đa 260).
+private struct PCImageTile: View {
+    let name: String
+    let sessionId: String
+    @Environment(AppModel.self) private var app
+    @State private var img: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let img {
+                // ScrollView ngang không đề xuất chiều rộng -> phải đặt khung cố định, không thì ảnh hiện cỡ gốc
+                let w = min(max(140 * img.size.width / max(img.size.height, 1), 60), 260)
+                Image(uiImage: img).resizable().scaledToFill()
+                    .frame(width: w, height: 140)
+                    .clipped()
+            } else {
+                Group {
+                    if failed { Image(systemName: "photo").foregroundStyle(.secondary) } else { ProgressView() }
+                }
+                .frame(width: 140, height: 100)
+            }
+        }
+        .background(Color(.tertiarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .task(id: name) {
+            guard img == nil, let api = app.api else { return }
+            img = await FullImages.load(api, sessionId, name)
+            failed = img == nil
         }
     }
 }

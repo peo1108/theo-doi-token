@@ -289,7 +289,7 @@ struct EventRow: View {
         case "tool":
             let result = event.toolId.flatMap { model.toolResults[$0] }
             TimelineRow(color: toolColor(result)) {
-                ToolRow(event: event, result: result, live: model.summary?.live == true)
+                ToolRow(event: event, result: result, live: model.summary?.live == true, sessionId: model.id)
             }
         case "permission":
             TimelineRow(color: .orange) {
@@ -335,6 +335,7 @@ struct ToolRow: View {
     let event: Event
     let result: Event?
     let live: Bool
+    let sessionId: String
     @State private var open = false
 
     private var name: String { event.name ?? "Tool" }
@@ -363,6 +364,10 @@ struct ToolRow: View {
                 Text(sub).font(.caption).foregroundStyle(.secondary)
             }
             detail
+            // ảnh Claude xem trên máy (Read file ảnh, tool chụp màn hình…)
+            if let imgs = result?.images, !imgs.isEmpty {
+                EventImages(images: imgs, sessionId: sessionId)
+            }
         }
     }
 
