@@ -44,8 +44,8 @@ struct MarkdownText: View {
             }
         case .code(let lang, let s):
             CodeBlock(text: s, label: lang.isEmpty ? nil : lang)
-        case .table(let rows):
-            TableBlock(rows: rows)
+        case .table(let aligns, let rows):
+            TableBlock(aligns: aligns, rows: rows)
         case .quote(let s):
             HStack(alignment: .top, spacing: 8) {
                 RoundedRectangle(cornerRadius: 1.5).fill(Color.secondary.opacity(0.4)).frame(width: 3)
@@ -70,7 +70,8 @@ enum MarkdownParser {
         case paragraph(String)
         case list([Item])
         case code(String, String)
-        case table([[String]])
+        /// căn lề từng cột (từ dòng `|:--|--:|`), các hàng (hàng đầu là tiêu đề)
+        case table([TextAlignment], [[String]])
         case quote(String)
         case rule
     }
@@ -108,13 +109,14 @@ enum MarkdownParser {
             if isRule(t) { flush(); out.append(.rule); i += 1; continue }
             if t.hasPrefix("|"), i + 1 < lines.count, isTableSeparator(lines[i + 1]) {
                 flush()
+                let aligns = cells(lines[i + 1].trimmingCharacters(in: .whitespaces)).map(alignment)
                 var rows = [cells(t)]
                 i += 2
                 while i < lines.count, lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("|") {
                     rows.append(cells(lines[i].trimmingCharacters(in: .whitespaces)))
                     i += 1
                 }
-                out.append(.table(rows))
+                out.append(.table(aligns, rows))
                 continue
             }
             if t.hasPrefix(">") {
@@ -166,15 +168,37 @@ enum MarkdownParser {
 
     private static func isTableSeparator(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces)
-        guard t.contains("-") else { return false }
+        guard t.contains("-"), t.contains("|") else { return false }
         return t.allSatisfy { "|-: ".contains($0) }
     }
 
+    /// Tách ô theo `|`, trừ `\|` (dấu | nằm trong ô, vd. `a \| b`); `<br>` thành xuống dòng như GitHub.
     private static func cells(_ t: String) -> [String] {
-        var s = t
-        if s.hasPrefix("|") { s.removeFirst() }
-        if s.hasSuffix("|") { s.removeLast() }
-        return s.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+        var s = Substring(t)
+        if s.hasPrefix("|") { s = s.dropFirst() }
+        if s.hasSuffix("|"), !s.hasSuffix("\\|") { s = s.dropLast() }
+        var out: [String] = []
+        var cur = ""
+        for ch in s {
+            if ch == "|", cur.hasSuffix("\\") {
+                cur.removeLast()
+                cur.append("|")
+            } else if ch == "|" {
+                out.append(cur)
+                cur = ""
+            } else {
+                cur.append(ch)
+            }
+        }
+        out.append(cur)
+        return out.map {
+            $0.replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: [.regularExpression, .caseInsensitive])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    private static func alignment(_ c: String) -> TextAlignment {
+        c.hasPrefix(":") && c.hasSuffix(":") && c.count > 1 ? .center : c.hasSuffix(":") ? .trailing : .leading
     }
 
     private static func listItem(_ line: String) -> Item? {
@@ -245,33 +269,110 @@ struct CodeBlock: View {
     }
 }
 
-/// Bảng markdown: hàng đầu là tiêu đề, cuộn ngang khi rộng.
+/// Bảng markdown: hàng đầu là tiêu đề. Vừa màn hình thì cột dài được bóp lại cho chữ xuống dòng;
+/// nhiều cột tới mức bóp vẫn không vừa mới cuộn ngang.
 struct TableBlock: View {
+    let aligns: [TextAlignment]
     let rows: [[String]]
 
     var body: some View {
         let cols = rows.map(\.count).max() ?? 0
-        ScrollView(.horizontal, showsIndicators: false) {
-            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { r, row in
-                    GridRow {
-                        ForEach(0..<cols, id: \.self) { c in
-                            Text(Inline.attributed(c < row.count ? row[c] : "", code: .system(.footnote, design: .monospaced)))
-                                .font(r == 0 ? .footnote.weight(.semibold) : .footnote)
-                                .textSelection(.enabled)
-                                .frame(minWidth: 70, maxWidth: 240, alignment: .leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.horizontal, 8).padding(.vertical, 6)
-                                .frame(maxHeight: .infinity, alignment: .topLeading)
-                                .background(r == 0 ? Color(.tertiarySystemFill) : Color.clear)
-                                .overlay(Rectangle().stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
-                        }
-                    }
-                }
-            }
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.35), lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+        ViewThatFits(in: .horizontal) {
+            grid(cols, fit: true)
+            ScrollView(.horizontal, showsIndicators: false) { grid(cols, fit: false) }
         }
+    }
+
+    private func grid(_ cols: Int, fit: Bool) -> some View {
+        TableLayout(cols: cols, fit: fit) {
+            ForEach(0..<rows.count * cols, id: \.self) { i in
+                cell(i / cols, i % cols)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondary.opacity(0.35), lineWidth: 1))
+    }
+
+    private func cell(_ r: Int, _ c: Int) -> some View {
+        let align = c < aligns.count ? aligns[c] : .leading
+        return Text(Inline.attributed(c < rows[r].count ? rows[r][c] : "", code: .system(.footnote, design: .monospaced)))
+            .font(r == 0 ? .footnote.weight(.semibold) : .footnote)
+            .monospacedDigit()
+            .multilineTextAlignment(align)
+            .textSelection(.enabled)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                   alignment: align == .trailing ? .topTrailing : align == .center ? .top : .topLeading)
+            .background(r == 0 ? Color(.tertiarySystemFill) : Color.clear)
+            .overlay(Rectangle().stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+    }
+}
+
+/// Xếp ô bảng theo cột: hàng cao bằng ô cao nhất *đo ở đúng bề rộng cột*, nên ô nhiều dòng không
+/// tràn đè sang hàng khác (Grid trong ScrollView ngang đo ô như chữ một dòng rồi mới cho xuống dòng).
+private struct TableLayout: Layout {
+    let cols: Int
+    /// true: bóp các cột dài (không hẹp hơn `minWrap`) cho vừa bề rộng được đề nghị; bề rộng lý tưởng
+    /// báo cho ViewThatFits là bề rộng hẹp nhất còn đọc được. false: nằm trong ScrollView ngang.
+    let fit: Bool
+    static let minWrap: CGFloat = 96
+    static let maxCol: CGFloat = 240
+
+    /// bề rộng tự nhiên (chữ một dòng) của từng cột
+    func makeCache(subviews: Subviews) -> [CGFloat] {
+        guard cols > 0 else { return [] }
+        var w = Array(repeating: CGFloat(0), count: cols)
+        for (i, v) in subviews.enumerated() {
+            w[i % cols] = max(w[i % cols], ceil(v.sizeThatFits(.unspecified).width))
+        }
+        return w
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout [CGFloat]) -> CGSize {
+        let (w, h) = measure(subviews, natural: cache, width: proposal.width)
+        return CGSize(width: w.reduce(0, +), height: h.reduce(0, +))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout [CGFloat]) {
+        let (w, h) = measure(subviews, natural: cache, width: proposal.width)
+        var y = bounds.minY
+        for r in h.indices {
+            var x = bounds.minX
+            for c in w.indices {
+                subviews[r * cols + c].place(at: CGPoint(x: x, y: y), anchor: .topLeading,
+                                             proposal: ProposedViewSize(width: w[c], height: h[r]))
+                x += w[c]
+            }
+            y += h[r]
+        }
+    }
+
+    private func measure(_ subviews: Subviews, natural: [CGFloat], width: CGFloat?) -> (widths: [CGFloat], heights: [CGFloat]) {
+        guard cols > 0, natural.count == cols else { return ([], []) }
+        var widths = natural
+        if !fit {
+            widths = widths.map { min($0, Self.maxCol) }
+        } else if let width {
+            if widths.reduce(0, +) > width {
+                // cột hẹp giữ nguyên, các cột dài chia đều phần còn lại
+                var room = width, left = cols, cap = width
+                for w in widths.sorted() {
+                    if w > room / CGFloat(left) { cap = room / CGFloat(left); break }
+                    room -= w
+                    left -= 1
+                }
+                cap = max(floor(cap), Self.minWrap)
+                widths = widths.map { min($0, cap) }
+            }
+        } else {
+            widths = widths.map { min($0, Self.minWrap) }
+        }
+        var heights = Array(repeating: CGFloat(0), count: subviews.count / cols)
+        for (i, v) in subviews.enumerated() where i / cols < heights.count {
+            let h = v.sizeThatFits(ProposedViewSize(width: widths[i % cols], height: nil)).height
+            heights[i / cols] = max(heights[i / cols], ceil(h))
+        }
+        return (widths, heights)
     }
 }
 
