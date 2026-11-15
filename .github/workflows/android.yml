@@ -1,0 +1,65 @@
+name: Android app (CC Remote)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build signed APK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    env:
+      # versionCode tăng dần theo lần chạy -> cài đè được bản cũ
+      VERSION_CODE: ${{ github.run_number }}
+      # khoá ký release cố định (Settings → Secrets); thiếu thì build ký bằng khoá debug và in cảnh báo
+      ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Test + build release
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest assembleRelease --console=plain
+
+      - name: Package APK
+        run: |
+          APK="$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+          test -n "$APK"
+          cp "$APK" CCRemote.apk
+          ls -lh CCRemote.apk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CCRemote-apk
+          path: android/CCRemote.apk
+          if-no-files-found: error
+
+      - name: Publish to release "android-latest"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view android-latest >/dev/null 2>&1 || \
+            gh release create android-latest --title "CC Remote (Android, bản mới nhất)" --notes "APK đã ký — mở file trên điện thoại để cài (cho phép cài từ nguồn này). Cài đè được bản cũ vì dùng chung một khoá ký." --prerelease
+          gh release upload android-latest CCRemote.apk --clobber

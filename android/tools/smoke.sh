@@ -16,6 +16,7 @@ EMU="$SDK/emulator/emulator.exe"; [ -x "$EMU" ] || EMU="$SDK/emulator/emulator"
 AVDMGR="$SDK/cmdline-tools/latest/bin/avdmanager.bat"; [ -f "$AVDMGR" ] || AVDMGR="$SDK/cmdline-tools/latest/bin/avdmanager"
 AVD="${SMOKE_AVD:-ccremote-smoke}"
 PKG=vn.peo.ccremote
+VARIANT="${SMOKE_VARIANT:-Debug}"   # Debug, hoặc Minified để thử với R8 như bản release
 OUT="$ANDROID/build/smoke"
 TMP="$ANDROID/build/smoke-tmp/run-$(date +%s)"   # thư mục mới mỗi lần (emulator có thể còn giữ file của lần trước)
 PORT="${SMOKE_HUB_PORT:-7790}"
@@ -47,9 +48,9 @@ cleanup() {
 trap cleanup EXIT
 
 # ---- 1. build ----
-say "build APK debug"
-( cd "$ANDROID" && ./gradlew assembleDebug --console=plain -q ) >>"$LOG" 2>&1 || { say "build thất bại (xem $LOG)"; exit 1; }
-APK="$ANDROID/app/build/outputs/apk/debug/app-debug.apk"
+say "build APK $VARIANT"
+( cd "$ANDROID" && ./gradlew "assemble${VARIANT}" --console=plain -q ) >>"$LOG" 2>&1 || { say "build thất bại (xem $LOG)"; exit 1; }
+APK="$ANDROID/app/build/outputs/apk/$(echo "$VARIANT" | tr A-Z a-z)/app-$(echo "$VARIANT" | tr A-Z a-z).apk"
 
 # ---- 2. smoke-server ----
 if [ ! -d "$ROOT/hub/node_modules/ws" ]; then say "npm ci trong hub/"; ( cd "$ROOT/hub" && npm ci --silent ) >>"$LOG" 2>&1; fi
@@ -72,7 +73,7 @@ if ! "$EMU" -list-avds | grep -qx "$AVD"; then
 fi
 if ! "$ADB" devices | grep -q "emulator-"; then
   say "khởi động emulator (nền, không cửa sổ)"
-  "$EMU" -avd "$AVD" -no-window -no-audio -no-snapshot -gpu "${SMOKE_GPU:-host}" -no-boot-anim >"$OUT/emulator.log" 2>&1 &
+  "$EMU" -avd "$AVD" -no-window -no-audio -no-snapshot -wipe-data -gpu "${SMOKE_GPU:-host}" -no-boot-anim >"$OUT/emulator.log" 2>&1 &
   EMU_PID=$!
 fi
 "$ADB" wait-for-device
@@ -80,8 +81,14 @@ for i in $(seq 1 180); do
   [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
   sleep 2
 done
-say "emulator đã boot"
-sleep 5
+say "emulator đã boot, chờ các dịch vụ hệ thống và launcher"
+for i in $(seq 1 150); do
+  [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] \
+    && "$ADB" shell pm path android 2>/dev/null | grep -q package \
+    && "$ADB" shell "dumpsys window" 2>/dev/null | grep -q "mCurrentFocus=Window" && break
+  sleep 3
+done
+sleep 30
 a() { "$ADB" "$@"; }
 a shell settings put global window_animation_scale 0 >/dev/null
 a shell settings put global transition_animation_scale 0 >/dev/null
@@ -91,11 +98,15 @@ a shell settings put global animator_duration_scale 0 >/dev/null
 SHOTS="$(cygpath -u "$LOCALAPPDATA")/Temp/ccremote-smoke-shots"   # đường dẫn không có dấu cách (lệnh console tách theo dấu cách)
 shot() {
   sleep "${2:-3}"
-  rm -rf "$SHOTS"; mkdir -p "$SHOTS"
-  "$ADB" emu screenrecord screenshot "$(cygpath -w "$SHOTS")" >/dev/null 2>&1
-  for i in $(seq 1 20); do ls "$SHOTS"/*.png >/dev/null 2>&1 && break; sleep 0.5; done
-  sleep 0.5
-  mv "$SHOTS"/*.png "$OUT/$1.png" 2>/dev/null && say "ảnh $1.png" || say "KHÔNG chụp được $1"
+  for try in 1 2 3 4; do
+    rm -rf "$SHOTS"; mkdir -p "$SHOTS"
+    "$ADB" emu screenrecord screenshot "$(cygpath -w "$SHOTS")" >/dev/null 2>&1
+    for i in $(seq 1 20); do ls "$SHOTS"/*.png >/dev/null 2>&1 && break; sleep 0.5; done
+    sleep 0.5
+    mv "$SHOTS"/*.png "$OUT/$1.png" 2>/dev/null && { say "ảnh $1.png"; return 0; }
+    sleep 3
+  done
+  say "KHÔNG chụp được $1"
 }
 dump() { a shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; a pull /sdcard/ui.xml "$(win "$OUT/ui-$1.xml")" >/dev/null 2>&1; }
 tap_text() {   # tap_text <chữ> [thứ tự]

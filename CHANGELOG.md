@@ -2,6 +2,9 @@
 
 ## Chưa phát hành
 
+- **App Android (CC Remote)**: bản native Kotlin + Compose làm đúng như app iOS (đăng nhập hub, chọn máy, phiên, markdown có bảng, xin quyền,
+  ảnh, cài đặt phiên…), thêm **kết nối nền bằng dịch vụ foreground** — thông báo tức thì có nút Cho phép / Từ chối / Trả lời ngay trên
+  thông báo, tự chạy lại sau khi khởi động máy. Build + ký APK bằng `.github/workflows/android.yml` (release `android-latest`).
 - App: **xem được ảnh Claude xem trên máy** — ảnh Claude mở bằng Read, ảnh chụp màn hình của tool, ảnh dán vào khung
   chat VS Code. Ảnh hiện ngay dưới dòng tool / lời nhắn, bấm để xem cỡ đầy đủ (trước đây chỉ thấy chữ `[ảnh]`).
 - Khởi động lại khay / cập nhật tracker không còn làm phiên VS Code mất trạng thái "sẵn sàng": hook tự nối lại với tracker

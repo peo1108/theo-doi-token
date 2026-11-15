@@ -188,6 +188,20 @@ phiên Claude Code để có hiệu lực. Gỡ: `node remote.js hooks uninstall
 **Build app** (không cần Mac): mỗi lần đẩy thay đổi trong `ios/` lên GitHub, workflow `.github/workflows/ios.yml` build
 trên macOS của GitHub Actions bằng XcodeGen, rồi đưa IPA chưa ký lên release `ios-latest`. Icon: `node ios/tools/make-icon.js`.
 
+### App Android
+
+Bản Android native (`android/`, Kotlin + Jetpack Compose) làm đúng những gì app iOS làm, nói chuyện với cùng hub, và hơn một điểm:
+**giữ kết nối nền bằng dịch vụ foreground** nên báo tức thì ngay trong app, có nút **Cho phép / Từ chối** xin quyền và ô **Trả lời**
+ngay trên thông báo (không cần ntfy; ntfy vẫn là đường dự phòng). Cài: tải `CCRemote.apk` ở release
+[`android-latest`](https://github.com/peo1108/theo-doi-token/releases/tag/android-latest), mở file trên điện thoại (cho phép cài
+từ nguồn này), đăng nhập cùng tài khoản hub. APK dùng một khoá ký cố định nên cài đè được bản mới. Cài đặt có "Giữ kết nối nền"
+(bật mặc định, tự chạy lại sau khi khởi động máy) và gợi ý tắt tối ưu pin.
+
+Build: `cd android && ./gradlew testDebugUnitTest assembleDebug` (JDK 21, Android SDK). Workflow `.github/workflows/android.yml` build
+bản release ký bằng secrets `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`
+(máy local: `%USERPROFILE%\.ccremote\android-signing.properties`; thiếu thì ký bằng khoá debug). Kiểm thử trên emulator với hub thật + claude
+giả: `android/tools/smoke.sh` (ảnh chụp vào `android/build/smoke/`). Thiết kế: [docs/superpowers/specs/2026-11-15-cc-remote-android-design.md](docs/superpowers/specs/2026-11-15-cc-remote-android-design.md).
+
 ## Monitoring chuẩn (tuỳ chọn)
 
 **Prometheus + Grafana** (cần Docker Desktop):

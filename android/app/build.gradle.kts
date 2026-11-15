@@ -64,6 +64,14 @@ android {
     }
 
     buildTypes {
+        // như debug (có DebugHooks để smoke test) nhưng chạy R8 giống release: kiểm tra quy tắc proguard / kotlinx.serialization
+        create("minified") {
+            initWith(getByName("debug"))
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            matchingFallbacks += "debug"
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -77,6 +85,12 @@ android {
                 }
             }
         }
+    }
+
+    sourceSets.getByName("minified") {
+        java.srcDir("src/debug/java")
+        res.srcDir("src/debug/res")
+        manifest.srcFile("src/debug/AndroidManifest.xml")
     }
 
     compileOptions {
