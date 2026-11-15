@@ -73,7 +73,7 @@ if ! "$EMU" -list-avds | grep -qx "$AVD"; then
 fi
 if ! "$ADB" devices | grep -q "emulator-"; then
   say "khởi động emulator (nền, không cửa sổ)"
-  "$EMU" -avd "$AVD" -no-window -no-audio -no-snapshot -wipe-data -gpu "${SMOKE_GPU:-host}" -no-boot-anim >"$OUT/emulator.log" 2>&1 &
+  "$EMU" -avd "$AVD" -no-window -no-audio -no-snapshot -gpu "${SMOKE_GPU:-host}" -no-boot-anim >"$OUT/emulator.log" 2>&1 &
   EMU_PID=$!
 fi
 "$ADB" wait-for-device
