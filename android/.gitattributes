@@ -1,0 +1,5 @@
+# gradlew chạy trên Linux (CI) nên phải là LF; .bat giữ CRLF
+* text=auto
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary

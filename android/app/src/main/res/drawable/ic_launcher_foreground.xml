@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- dấu ">_" trắng của icon iOS (ios/tools/make-icon.js), thu về 72dp giữa vùng an toàn 108dp -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M39.1,41.2L54.6,54L39.1,66.8"
+        android:strokeColor="#FFFAF5"
+        android:strokeWidth="7.9"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M59.5,67.2L71.4,67.2"
+        android:strokeColor="#FFFAF5"
+        android:strokeWidth="7.9"
+        android:strokeLineCap="round" />
+</vector>
