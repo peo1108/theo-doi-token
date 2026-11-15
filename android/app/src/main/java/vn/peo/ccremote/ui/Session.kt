@@ -107,6 +107,7 @@ import vn.peo.ccremote.data.Question
 import vn.peo.ccremote.data.clockTime
 import vn.peo.ccremote.data.effortLabel
 import vn.peo.ccremote.data.statusInfo
+import vn.peo.ccremote.notify.Notifier
 import vn.peo.ccremote.session.Haptic
 import vn.peo.ccremote.session.SessionModel
 import vn.peo.ccremote.ui.theme.Semantic
@@ -146,6 +147,7 @@ fun SessionScreen(app: AppModel, id: String) {
     // đang xem phiên này thì không báo
     DisposableEffect(id) {
         app.activeSessionId = id
+        Notifier.cancelFor(ctx, id)
         onDispose { if (app.activeSessionId == id) app.activeSessionId = null }
     }
 

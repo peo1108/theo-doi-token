@@ -33,6 +33,7 @@ import vn.peo.ccremote.data.SecureStore
 import vn.peo.ccremote.data.SessionSummary
 import vn.peo.ccremote.data.SwitchResponse
 import vn.peo.ccremote.data.jsonOf
+import vn.peo.ccremote.notify.HubServiceControl
 import vn.peo.ccremote.notify.Notifier
 import vn.peo.ccremote.data.normalizeHubUrl
 import java.util.concurrent.TimeUnit
@@ -165,6 +166,7 @@ class AppModel(val application: Application, val http: OkHttpClient) {
         SecureStore.set("hubToken", r.token)
         lastError = null
         startHub(r.token)
+        HubServiceControl.sync(application)
         hub?.ready()
         pickMachine()
         refresh()

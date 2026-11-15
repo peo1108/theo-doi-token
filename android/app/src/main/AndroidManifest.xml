@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:name=".App"
@@ -29,6 +33,27 @@
                 <data android:scheme="ccremote" android:host="session" />
             </intent-filter>
         </activity>
+
+        <!-- giữ kết nối hub ở nền (thông báo tức thì, nút Cho phép / Từ chối) -->
+        <service
+            android:name=".notify.HubService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
+
+        <!-- nút trên thông báo: Cho phép / Từ chối / Trả lời -->
+        <receiver
+            android:name=".notify.NotificationActionReceiver"
+            android:exported="false" />
+
+        <!-- khởi động máy / cập nhật app -> bật lại kết nối nền -->
+        <receiver
+            android:name=".notify.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"

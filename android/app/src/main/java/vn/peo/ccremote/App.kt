@@ -7,6 +7,7 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import okhttp3.OkHttpClient
 import vn.peo.ccremote.data.Prefs
 import vn.peo.ccremote.data.SecureStore
+import vn.peo.ccremote.notify.Notifier
 import java.util.concurrent.TimeUnit
 
 /** Dựng tay các đối tượng dùng chung (không Hilt). */
@@ -28,6 +29,7 @@ class App : Application() {
         AppGraph.app = this
         Prefs.init(this)
         SecureStore.init(this)
+        Notifier.setup(AppGraph.model)
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 val m = AppGraph.model
