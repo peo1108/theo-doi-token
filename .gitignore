@@ -1,4 +1,6 @@
-data/
+# dữ liệu chạy của tracker (gốc repo) và của hub — không chặn package android .../data/
+/data/
+hub/data/
 node_modules/
 *.tmp
 .worktrees/
