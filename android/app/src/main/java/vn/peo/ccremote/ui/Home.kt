@@ -42,6 +42,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,6 +71,9 @@ fun HomeScreen(app: AppModel) {
     var refreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val state = app.state
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // các mục tài khoản / cảnh báo chèn thêm phía trên khi state tải xong: LazyColumn giữ nguyên mục đang thấy -> về đầu danh sách
+    LaunchedEffect(state != null, app.machineId) { if (state != null) listState.scrollToItem(0) }
 
     Scaffold(
         topBar = {
@@ -90,7 +94,7 @@ fun HomeScreen(app: AppModel) {
             onRefresh = { scope.launch { refreshing = true; app.refresh(); refreshing = false } },
             modifier = Modifier.padding(pad).fillMaxSize(),
         ) {
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 app.lastError?.let { err ->
                     item("err") { SectionCard { Column(Modifier.padding(16.dp)) { ErrorLabel(err, icon = Icons.Outlined.WifiOff) } } }
                 }

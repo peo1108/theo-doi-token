@@ -32,6 +32,15 @@ class MainActivity : ComponentActivity() {
 
     /** Deep link ccremote://session/<máy>/<phiên> (ntfy, thông báo) -> mở thẳng phiên. */
     private fun handleIntent(intent: Intent?) {
-        intent?.data?.let { app.open(it) }
+        if (intent == null) return
+        if (BuildConfig.DEBUG) {
+            // chỉ bản debug có lớp này (src/debug): nạp token từ intent extra để chạy smoke test trên emulator
+            try {
+                Class.forName("vn.peo.ccremote.DebugHooks").getMethod("handle", Intent::class.java, AppModel::class.java).invoke(null, intent, app)
+            } catch (_: ClassNotFoundException) {
+            } catch (_: Exception) {
+            }
+        }
+        intent.data?.let { app.open(it) }
     }
 }

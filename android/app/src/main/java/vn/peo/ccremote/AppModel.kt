@@ -172,6 +172,24 @@ class AppModel(val application: Application, val http: OkHttpClient) {
         refresh()
     }
 
+    /**
+     * Nạp sẵn token hub + máy (smoke test trên emulator, chỉ bản debug gọi qua DebugHooks): bỏ qua bước đăng nhập,
+     * không đăng nhập hub thật.
+     */
+    fun adoptToken(url: String, token: String, machine: String?) {
+        hubURL = normalizeHubUrl(url)
+        Prefs.hubUrl = hubURL
+        hubToken = token
+        SecureStore.set("hubToken", token)
+        if (!machine.isNullOrEmpty()) {
+            machineId = machine
+            Prefs.machineId = machine
+        }
+        startHub(token)
+        HubServiceControl.sync(application)
+        scope.launch { refresh() }
+    }
+
     private fun deviceName(): String {
         val m = Build.MANUFACTURER.orEmpty().replaceFirstChar { it.uppercase() }
         val model = Build.MODEL.orEmpty()

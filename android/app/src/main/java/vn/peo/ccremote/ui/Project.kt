@@ -94,6 +94,8 @@ fun ProjectScreen(app: AppModel, cwd: String) {
         app.refresh()
     }
     LaunchedEffect(cwd) { load() }
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    LaunchedEffect(loaded) { if (loaded) listState.scrollToItem(0) }
 
     Scaffold(
         topBar = {
@@ -109,7 +111,7 @@ fun ProjectScreen(app: AppModel, cwd: String) {
             onRefresh = { scope.launch { refreshing = true; load(); refreshing = false } },
             modifier = Modifier.padding(pad).fillMaxSize(),
         ) {
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 item("new") {
                     SectionCard {
                         ClickRow({ app.path.add(Route.NewSession(cwd)) }) {

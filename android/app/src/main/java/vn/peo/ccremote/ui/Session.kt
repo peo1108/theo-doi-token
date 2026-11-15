@@ -320,7 +320,7 @@ private fun ComposerRow(
         AttachButton(pickers, picks)
         OutlinedTextField(
             value = draft, onValueChange = onDraft, modifier = Modifier.weight(1f).focusRequester(focus),
-            placeholder = { Text("Nhắn cho Claude…  (/ để xem lệnh)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            placeholder = { Text("Nhắn cho Claude…  (/ lệnh)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             maxLines = 6, shape = RoundedCornerShape(22.dp),
             textStyle = MaterialTheme.typography.bodyMedium,
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
@@ -593,11 +593,13 @@ fun PermissionCard(
         } else if (!qs.isNullOrEmpty()) {
             qs.forEachIndexed { i, q -> QuestionView(i, q, picks, others, decision != null) }
         } else {
-            SelectionContainer {
-                Text(
-                    event.summary ?: "", style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
-                    maxLines = if (showInput) Int.MAX_VALUE else 8, overflow = TextOverflow.Ellipsis,
-                )
+            if (!event.summary.isNullOrBlank()) {
+                SelectionContainer {
+                    Text(
+                        event.summary, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                        maxLines = if (showInput) Int.MAX_VALUE else 8, overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             if (!event.input.isNullOrEmpty()) {
                 Column {
